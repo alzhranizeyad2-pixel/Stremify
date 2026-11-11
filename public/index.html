@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Stremify — Stremio Addon Generator</title>
+<style>
+  :root{
+    --bg:#0a0a0a;--surface:#111111;--surface2:#1a1a1a;
+    --border:#2a2a2a;--border2:#3a3a3a;
+    --text:#f5f5f5;--muted:#8a8a8a;
+    --white:#ffffff;--black:#000000;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;min-height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--text);line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{
+    max-width:780px;margin:0 auto;
+    padding:calc(40px + env(safe-area-inset-top,0px)) 20px calc(80px + env(safe-area-inset-bottom,0px));
+  }
+  header{text-align:center;margin-bottom:40px}
+  h1{margin:0;font-size:clamp(2rem,5vw,2.8rem);font-weight:800;letter-spacing:-.03em;color:var(--white)}
+  h1 .dot{color:var(--muted)}
+  .sub{color:var(--muted);margin-top:8px;font-size:.95rem}
+
+  .card{
+    background:var(--surface);border:1px solid var(--border);
+    border-radius:14px;padding:24px;margin-bottom:16px;
+    transition:border-color .2s;
+  }
+  .card:hover{border-color:var(--border2)}
+  .card h2{
+    margin:0 0 4px;font-size:1.05rem;font-weight:700;
+    color:var(--white);letter-spacing:-.01em;
+    display:flex;align-items:center;gap:10px;
+  }
+  .card h2 .num{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:26px;height:26px;border-radius:50%;
+    background:var(--white);color:var(--black);
+    font-size:.8rem;font-weight:800;flex:none;
+  }
+  .card .hint{color:var(--muted);font-size:.85rem;margin:0 0 18px}
+
+  .addon-list{display:flex;flex-direction:column;gap:10px}
+  .addon{
+    background:var(--surface2);border:1px solid var(--border);
+    border-radius:12px;padding:14px 16px;transition:border-color .2s;
+  }
+  .addon:hover{border-color:var(--border2)}
+  .addon .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .addon .name{font-weight:700;font-size:.95rem;color:var(--white)}
+  .addon .desc{color:var(--muted);font-size:.78rem;margin-top:2px}
+  .addon .link{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:6px 12px;border-radius:8px;
+    background:transparent;border:1px solid var(--border2);
+    color:var(--muted);text-decoration:none;font-size:.78rem;
+    font-weight:600;transition:.15s;white-space:nowrap;
+  }
+  .addon .link:hover{color:var(--white);border-color:var(--white)}
+  .addon .link::after{content:"↗"}
+  .addon input[type=text]{
+    width:100%;margin-top:10px;padding:10px 12px;
+    background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);font-family:ui-monospace,"SF Mono",Consolas,monospace;
+    font-size:.82rem;direction:ltr;text-align:left;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  .addon input[type=text]:focus{outline:none;border-color:var(--white);box-shadow:0 0 0 3px rgba(255,255,255,.08)}
+  .addon input[type=text]::placeholder{color:#555}
+
+  .custom-block{margin-top:16px}
+  .custom-block label{display:block;font-weight:600;font-size:.85rem;margin-bottom:8px;color:var(--white)}
+  textarea{
+    width:100%;min-height:90px;padding:12px 14px;
+    background:var(--bg);border:1px solid var(--border);border-radius:10px;
+    color:var(--text);font-family:ui-monospace,"SF Mono",Consolas,monospace;
+    font-size:.82rem;direction:ltr;text-align:left;resize:vertical;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  textarea:focus{outline:none;border-color:var(--white);box-shadow:0 0 0 3px rgba(255,255,255,.08)}
+  textarea::placeholder{color:#555}
+
+  .field-label{display:block;font-weight:600;font-size:.85rem;margin-bottom:8px;color:var(--white)}
+
+  .dd{position:relative;user-select:none}
+  .dd-btn{
+    width:100%;display:flex;align-items:center;gap:12px;
+    padding:11px 40px 11px 14px;background:var(--bg);
+    border:1px solid var(--border);border-radius:10px;
+    color:var(--text);font-size:.92rem;font-family:inherit;
+    cursor:pointer;transition:border-color .15s, box-shadow .15s;
+    text-align:left;
+  }
+  .dd-btn:focus{outline:none;border-color:var(--white);box-shadow:0 0 0 3px rgba(255,255,255,.08)}
+  .dd-btn:hover{border-color:var(--border2)}
+  .dd.open .dd-btn{border-color:var(--white);box-shadow:0 0 0 3px rgba(255,255,255,.08)}
+  .dd-btn img{width:22px;height:22px;object-fit:contain;flex:none;border-radius:4px}
+  .dd-btn .label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dd-btn::after{
+    content:"";position:absolute;top:50%;right:16px;
+    width:8px;height:8px;border-right:2px solid var(--muted);
+    border-bottom:2px solid var(--muted);
+    transform:translateY(-70%) rotate(45deg);
+    transition:transform .2s, border-color .2s;pointer-events:none;
+  }
+  .dd.open .dd-btn::after{transform:translateY(-30%) rotate(-135deg);border-color:var(--white)}
+
+  .dd-menu{
+    position:absolute;top:calc(100% + 6px);left:0;right:0;
+    background:var(--surface2);border:1px solid var(--border2);
+    border-radius:10px;padding:6px;max-height:280px;overflow-y:auto;
+    box-shadow:0 12px 40px rgba(0,0,0,.6);z-index:50;display:none;
+    animation:ddOpen .15s ease-out;
+  }
+  .dd.open .dd-menu{display:block}
+  @keyframes ddOpen{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .dd-item{
+    display:flex;align-items:center;gap:12px;
+    padding:9px 12px;border-radius:7px;cursor:pointer;
+    font-size:.9rem;color:var(--text);transition:background .12s;
+  }
+  .dd-item:hover{background:rgba(255,255,255,.06)}
+  .dd-item.on{background:var(--white);color:var(--black);font-weight:700}
+  .dd-item img{width:22px;height:22px;object-fit:contain;flex:none;border-radius:4px}
+  .dd-menu::-webkit-scrollbar{width:6px}
+  .dd-menu::-webkit-scrollbar-track{background:transparent}
+  .dd-menu::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+  .check{
+    display:flex;align-items:center;gap:10px;margin-top:16px;
+    font-size:.88rem;cursor:pointer;color:var(--text);
+  }
+  .check input{width:18px;height:18px;accent-color:#fff;cursor:pointer;flex:none}
+  .legend{
+    margin:14px 0 0;padding:12px 14px;border:1px dashed var(--border2);
+    border-radius:10px;color:var(--muted);font-size:.78rem;line-height:1.8;
+  }
+
+  input[type=password]{
+    width:100%;padding:11px 14px;background:var(--bg);
+    border:1px solid var(--border);border-radius:10px;
+    color:var(--text);font-family:ui-monospace,"SF Mono",Consolas,monospace;
+    font-size:.85rem;direction:ltr;text-align:left;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  input[type=password]:focus{outline:none;border-color:var(--white);box-shadow:0 0 0 3px rgba(255,255,255,.08)}
+  input::placeholder{color:#555}
+
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:560px){.row{grid-template-columns:1fr}}
+
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;
+    padding:12px 22px;border-radius:10px;border:none;cursor:pointer;
+    font-weight:700;font-size:.92rem;font-family:inherit;
+    transition:.15s;text-decoration:none;white-space:nowrap;
+  }
+  .btn.primary{background:var(--white);color:var(--black)}
+  .btn.primary:hover{background:#e5e5e5;transform:translateY(-1px)}
+  .btn.ghost{background:transparent;border:1px solid var(--border2);color:var(--white)}
+  .btn.ghost:hover{border-color:var(--white);background:rgba(255,255,255,.04)}
+  .btn[disabled]{opacity:.4;cursor:not-allowed;transform:none!important}
+
+  .actions{display:flex;gap:10px;flex-wrap:wrap}
+
+  #result{display:none;margin-top:18px;padding-top:18px;border-top:1px solid var(--border)}
+  #result.on{display:block}
+  .link-box{
+    background:var(--bg);border:1px solid var(--border2);border-radius:10px;
+    padding:12px 14px;display:flex;gap:10px;align-items:center;
+  }
+  .link-box input{
+    flex:1;min-width:0;border:none;background:transparent;color:var(--white);
+    font-family:ui-monospace,Consolas,monospace;font-size:.78rem;padding:0;
+    direction:ltr;text-align:left;
+  }
+  .link-box input:focus{outline:none}
+  .copy-btn{
+    padding:6px 12px;background:var(--white);color:var(--black);
+    border:none;border-radius:6px;font-size:.75rem;font-weight:700;
+    cursor:pointer;transition:.15s;
+  }
+  .copy-btn:hover{background:#e5e5e5}
+
+  .toast{
+    position:fixed;bottom:calc(24px + env(safe-area-inset-bottom,0px));left:50%;
+    transform:translateX(-50%) translateY(20px);
+    background:var(--white);color:var(--black);
+    padding:10px 22px;border-radius:99px;
+    font-weight:700;font-size:.85rem;
+    opacity:0;transition:.25s;pointer-events:none;z-index:100;
+    max-width:90vw;text-align:center;
+  }
+  .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  footer{
+    text-align:center;color:var(--muted);
+    font-size:.78rem;margin-top:40px;
+    padding-top:24px;border-top:1px solid var(--border);
+  }
+  footer a{color:var(--text);text-decoration:none}
+  footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Stremify<span class="dot">.</span></h1>
+  <p class="sub">Multi-source Stremio addon · Detect embedded subtitles by preferred language</p>
+</header>
+
+<section class="card">
+  <h2><span class="num">1</span>Stream Sources</h2>
+  <p class="hint">Configure each addon on its own site, then paste the manifest URL below.</p>
+
+  <div class="addon-list">
+    <div class="addon">
+      <div class="top">
+        <div><div class="name">Torrentio</div><div class="desc">Torrent stream provider</div></div>
+        <a class="link" href="https://torrentio.strem.fun/configure" target="_blank" rel="noopener">Configure</a>
+      </div>
+      <input type="text" id="torrentioUrl" placeholder="https://torrentio.strem.fun/.../manifest.json" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="addon">
+      <div class="top">
+        <div><div class="name">Comet</div><div class="desc">Debrid + torrent streams</div></div>
+        <a class="link" href="https://comet.elfhosted.com/configure" target="_blank" rel="noopener">Configure</a>
+      </div>
+      <input type="text" id="cometUrl" placeholder="https://comet.elfhosted.com/.../manifest.json" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="addon">
+      <div class="top">
+        <div><div class="name">StremThru</div><div class="desc">Multi-provider torrent streams</div></div>
+        <a class="link" href="https://stremthru.13377001.xyz/stremio/torz/configure" target="_blank" rel="noopener">Configure</a>
+      </div>
+      <input type="text" id="stremthruUrl" placeholder="https://stremthru.13377001.xyz/.../manifest.json" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="addon">
+      <div class="top">
+        <div><div class="name">MediaFusion</div><div class="desc">Streams with subtitle metadata</div></div>
+        <a class="link" href="https://mediafusion.elfhosted.com/app/configure" target="_blank" rel="noopener">Configure</a>
+      </div>
+      <input type="text" id="mediafusionUrl" placeholder="https://mediafusion.elfhosted.com/.../manifest.json" autocomplete="off" spellcheck="false">
+    </div>
+  </div>
+
+  <div class="custom-block">
+    <label for="customSources">Additional custom sources</label>
+    <textarea id="customSources" placeholder="MyAddon|https://example.com/manifest.json" spellcheck="false"></textarea>
+    <p class="hint" style="margin-top:8px;margin-bottom:0">One per line: <code style="color:#fff">Name|URL</code></p>
+  </div>
+</section>
+
+<section class="card">
+  <h2><span class="num">2</span>Preferred Subtitle Language</h2>
+  <p class="hint">Each release is scanned for embedded or hardcoded subtitles in this language and labelled. If none is found, an external subtitle can be attached automatically.</p>
+
+  <div class="dd" id="langDD" data-value="en">
+    <button type="button" class="dd-btn" aria-haspopup="listbox" aria-expanded="false">
+      <img class="dd-ico" alt="">
+      <span class="label">English</span>
+    </button>
+    <div class="dd-menu" role="listbox">
+      <div class="dd-item" role="option" data-value="en" data-icon="https://dima.tools/emoji_to_png/i/i229YjpsEZ9_256.png"><img src="https://dima.tools/emoji_to_png/i/i229YjpsEZ9_256.png" alt=""><span>English</span></div>
+      <div class="dd-item" role="option" data-value="ar" data-icon="https://dima.tools/emoji_to_png/i/g3FN4NDKC8C_256.png"><img src="https://dima.tools/emoji_to_png/i/g3FN4NDKC8C_256.png" alt=""><span>Arabic</span></div>
+      <div class="dd-item" role="option" data-value="de" data-icon="https://dima.tools/emoji_to_png/i/Kcq2keEebw6_256.png"><img src="https://dima.tools/emoji_to_png/i/Kcq2keEebw6_256.png" alt=""><span>German</span></div>
+      <div class="dd-item" role="option" data-value="fr" data-icon="https://dima.tools/emoji_to_png/i/hboBSWFAj54_256.png"><img src="https://dima.tools/emoji_to_png/i/hboBSWFAj54_256.png" alt=""><span>French</span></div>
+      <div class="dd-item" role="option" data-value="es" data-icon="https://dima.tools/emoji_to_png/i/VJH3pmHTaVE_256.png"><img src="https://dima.tools/emoji_to_png/i/VJH3pmHTaVE_256.png" alt=""><span>Spanish</span></div>
+      <div class="dd-item" role="option" data-value="tr" data-icon="https://dima.tools/emoji_to_png/i/6c2FqVF2Ah6_256.png"><img src="https://dima.tools/emoji_to_png/i/6c2FqVF2Ah6_256.png" alt=""><span>Turkish</span></div>
+      <div class="dd-item" role="option" data-value="hi" data-icon="https://dima.tools/emoji_to_png/i/ZHrHz5uLTgb_256.png"><img src="https://dima.tools/emoji_to_png/i/ZHrHz5uLTgb_256.png" alt=""><span>Hindi</span></div>
+      <div class="dd-item" role="option" data-value="ja" data-icon="https://dima.tools/emoji_to_png/i/oBH8LYWVCk4_256.png"><img src="https://dima.tools/emoji_to_png/i/oBH8LYWVCk4_256.png" alt=""><span>Japanese</span></div>
+    </div>
+  </div>
+
+  <label class="check" for="extSubs">
+    <input type="checkbox" id="extSubs" checked>
+    <span>Attach an external subtitle when none is embedded</span>
+  </label>
+
+  <div class="legend">
+    💬 embedded subs &nbsp;·&nbsp; 🗣️ language audio/tag &nbsp;·&nbsp; 🔒 hardcoded subs &nbsp;·&nbsp; 🌐 language tag only &nbsp;·&nbsp; 🚫 nothing found
+  </div>
+</section>
+
+<section class="card">
+  <h2><span class="num">3</span>Debrid Service <span style="color:var(--muted);font-weight:400;font-size:.8rem">(optional)</span></h2>
+  <p class="hint">Add an API key to speed up streaming. It is injected into Torrentio only — for Comet or StremThru, set the key on their own configure page.</p>
+
+  <div class="row">
+    <div>
+      <label class="field-label">Service</label>
+      <div class="dd" id="debridDD" data-value="">
+        <button type="button" class="dd-btn" aria-haspopup="listbox" aria-expanded="false">
+          <img class="dd-ico" alt="" style="display:none">
+          <span class="label">No Debrid (P2P only)</span>
+        </button>
+        <div class="dd-menu" role="listbox">
+          <div class="dd-item" role="option" data-value="" data-icon=""><span>No Debrid (P2P only)</span></div>
+          <div class="dd-item" role="option" data-value="realdebrid" data-icon="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/real-debrid.png"><img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/real-debrid.png" alt=""><span>Real-Debrid — RD+</span></div>
+          <div class="dd-item" role="option" data-value="alldebrid"  data-icon="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/alldebrid.png"><img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/alldebrid.png" alt=""><span>AllDebrid — AD+</span></div>
+          <div class="dd-item" role="option" data-value="premiumize" data-icon="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/premiumize.png"><img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/premiumize.png" alt=""><span>Premiumize — PM+</span></div>
+          <div class="dd-item" role="option" data-value="torbox"     data-icon="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/torbox.png"><img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/torbox.png" alt=""><span>TorBox — TB+</span></div>
+          <div class="dd-item" role="option" data-value="debridlink" data-icon="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/debrid-link.png"><img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/debrid-link.png" alt=""><span>Debrid-Link — DL+</span></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <label class="field-label" for="key">API Key</label>
+      <input id="key" type="password" placeholder="Paste your API key" autocomplete="off">
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2><span class="num">4</span>Generate Link</h2>
+  <div class="actions">
+    <button class="btn primary" id="gen" type="button">Generate Link</button>
+    <button class="btn ghost" id="copy" type="button" disabled>Copy</button>
+    <a class="btn ghost" id="install" href="#" style="pointer-events:none;opacity:.4">Install in Stremio</a>
+  </div>
+  <div id="result">
+    <div class="link-box" style="margin-top:18px">
+      <input id="link" type="text" readonly placeholder="Your manifest URL will appear here...">
+      <button class="copy-btn" id="copy2" type="button">Copy</button>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Stremify · Your settings are stored only inside the generated link · <a href="https://strem.io" target="_blank" rel="noopener">Stremio</a>
+</footer>
+
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite">Copied to clipboard</div>
+
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const toastEl = $('toast');
+  function toast(msg){
+    toastEl.textContent = msg || 'Copied';
+    toastEl.classList.add('on');
+    clearTimeout(toastEl._t);
+    toastEl._t = setTimeout(() => toastEl.classList.remove('on'), 2400);
+  }
+
+  function closeAll(except){
+    document.querySelectorAll('.dd.open').forEach((d) => {
+      if (d === except) return;
+      d.classList.remove('open');
+      const b = d.querySelector('.dd-btn');
+      if (b) b.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function setupDD(ddEl){
+    const btn = ddEl.querySelector('.dd-btn');
+    const menu = ddEl.querySelector('.dd-menu');
+    const labelEl = btn.querySelector('.label');
+    const icoEl = btn.querySelector('.dd-ico');
+    const items = Array.from(menu.querySelectorAll('.dd-item'));
+
+    // hide any icon that fails to load instead of showing a broken image
+    icoEl.addEventListener('error', () => { icoEl.style.display = 'none'; });
+    menu.querySelectorAll('img').forEach((im) => im.addEventListener('error', () => im.remove()));
+
+    function apply(value){
+      const item = items.find((i) => i.dataset.value === value) || items[0];
+      if (!item) return;
+      ddEl.dataset.value = item.dataset.value;
+      labelEl.textContent = item.querySelector('span').textContent;
+      const icon = item.dataset.icon || '';
+      if (icon) {
+        icoEl.src = icon;
+        icoEl.style.display = '';
+      } else {
+        icoEl.removeAttribute('src');
+        icoEl.style.display = 'none';
+      }
+      items.forEach((i) => i.classList.toggle('on', i === item));
+    }
+    ddEl._apply = apply;
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeAll(ddEl);
+      ddEl.classList.toggle('open');
+      btn.setAttribute('aria-expanded', ddEl.classList.contains('open') ? 'true' : 'false');
+    });
+
+    items.forEach((it) => {
+      it.addEventListener('click', (e) => {
+        e.stopPropagation();
+        apply(it.dataset.value);
+        ddEl.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    });
+
+    apply(ddEl.dataset.value || '');
+  }
+
+  document.querySelectorAll('.dd').forEach(setupDD);
+  document.addEventListener('click', () => closeAll(null));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(null); });
+
+  function normUrl(u){
+    u = String(u || '').trim();
+    if (!u) return '';
+    return u.replace(/^stremio:\/\//i, 'https://')
+            .replace(/\/(manifest\.json|configure)\/?$/i, '')
+            .replace(/\/+$/, '');
+  }
+
+  function validUrl(u){
+    try { return new URL(u).protocol === 'https:'; } catch (e) { return false; }
+  }
+
+  function collect(){
+    const sources = [];
+    const bad = [];
+    const add = (name, raw) => {
+      const url = normUrl(raw);
+      if (!url) return;
+      if (!validUrl(url)) { bad.push(name); return; }
+      sources.push({ name, url });
+    };
+
+    [
+      { id: 'torrentioUrl',   name: 'Torrentio' },
+      { id: 'cometUrl',       name: 'Comet' },
+      { id: 'stremthruUrl',   name: 'StremThru' },
+      { id: 'mediafusionUrl', name: 'MediaFusion' },
+    ].forEach((f) => add(f.name, $(f.id).value));
+
+    $('customSources').value.split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => {
+      const i = l.indexOf('|');
+      if (i < 0) { bad.push(l.slice(0, 24)); return; }
+      const name = l.slice(0, i).trim();
+      if (!name) { bad.push(l.slice(0, 24)); return; }
+      add(name, l.slice(i + 1));
+    });
+
+    return {
+      cfg: {
+        sources,
+        lang: $('langDD').dataset.value || 'en',
+        debrid: $('debridDD').dataset.value || '',
+        key: $('key').value.trim(),
+        ext: $('extSubs').checked,
+      },
+      bad,
+    };
+  }
+
+  function b64u(str){
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    bytes.forEach((b) => { bin += String.fromCharCode(b); });
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function ub64(str){
+    str = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (str.length % 4) str += '=';
+    const bin = atob(str);
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  }
+
+  // Opened from Stremio's "Configure" button: /c/<token>/configure -> restore the saved settings
+  function prefill(){
+    const m = location.pathname.match(/^\/c\/([\w-]+)\/configure\/?$/);
+    if (!m) return;
+    try {
+      const cfg = JSON.parse(ub64(m[1]));
+      const byName = { torrentio: 'torrentioUrl', comet: 'cometUrl', stremthru: 'stremthruUrl', mediafusion: 'mediafusionUrl' };
+      const custom = [];
+      (Array.isArray(cfg.sources) ? cfg.sources : []).forEach((s) => {
+        const id = byName[String(s.name).toLowerCase()];
+        if (id && !$(id).value) $(id).value = s.url;
+        else custom.push(s.name + '|' + s.url);
+      });
+      $('customSources').value = custom.join('\n');
+      if (cfg.lang) $('langDD')._apply(cfg.lang);
+      $('debridDD')._apply(cfg.debrid || '');
+      if (cfg.key) $('key').value = cfg.key;
+      $('extSubs').checked = cfg.ext !== false;
+    } catch (e) { /* ignore a malformed token */ }
+  }
+  prefill();
+
+  $('gen').addEventListener('click', () => {
+    if (!/^https?:$/.test(location.protocol)) {
+      return toast('Open this page from your server, not as a local file.');
+    }
+    const { cfg, bad } = collect();
+    if (bad.length) return toast('Invalid https URL: ' + bad.join(', '));
+    if (!cfg.sources.length) return toast('Add at least one source URL.');
+    if (cfg.debrid && !cfg.key) return toast('Paste your API key or choose "No Debrid".');
+
+    const link = location.origin + '/c/' + b64u(JSON.stringify(cfg)) + '/manifest.json';
+
+    $('link').value = link;
+    $('result').classList.add('on');
+    $('copy').disabled = false;
+
+    const install = $('install');
+    install.href = 'stremio://' + link.replace(/^https?:\/\//, '');
+    install.style.pointerEvents = '';
+    install.style.opacity = '1';
+
+    toast('Link generated');
+  });
+
+  function doCopy(){
+    const v = $('link').value;
+    if (!v) return;
+    const fallback = () => {
+      $('link').select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) {}
+      toast(ok ? 'Copied to clipboard' : 'Press Ctrl+C to copy');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(v).then(() => toast('Copied to clipboard')).catch(fallback);
+    } else {
+      fallback();
+    }
+  }
+  $('copy').addEventListener('click', doCopy);
+  $('copy2').addEventListener('click', doCopy);
+})();
+</script>
+</body>
+</html>
