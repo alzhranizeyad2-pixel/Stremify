@@ -375,6 +375,7 @@
     const icoEl = btn.querySelector('.dd-ico');
     const items = Array.from(menu.querySelectorAll('.dd-item'));
 
+    // hide any icon that fails to load instead of showing a broken image
     icoEl.addEventListener('error', () => { icoEl.style.display = 'none'; });
     menu.querySelectorAll('img').forEach((im) => im.addEventListener('error', () => im.remove()));
 
@@ -483,6 +484,7 @@
     return new TextDecoder().decode(bytes);
   }
 
+  // Opened from Stremio's "Configure" button: /c/<token>/configure -> restore the saved settings
   function prefill(){
     const m = location.pathname.match(/^\/c\/([\w-]+)\/configure\/?$/);
     if (!m) return;
@@ -501,7 +503,7 @@
       if (cfg.key) $('key').value = cfg.key;
       $('extSubs').checked = cfg.ext !== false;
       $('verify').checked = cfg.verify !== false;
-    } catch (e) {}
+    } catch (e) { /* ignore a malformed token */ }
   }
   prefill();
 
