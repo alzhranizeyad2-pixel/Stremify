@@ -451,6 +451,26 @@ function subVerdict(r) {
   if (r.flag) return 'flag';
   return 'none';
 }
+
+
+function subScore(verdict, proof) {
+  // Verified from actual file bytes (MKV Tracks / MP4 moov)
+  if (verdict === 'psub')    return 100;
+  if (verdict === 'paudio')  return 95;
+  if (verdict === 'psubimg') return 85;
+  if (verdict === 'pnone')   return 10;
+
+  // Heuristic from release name / addon subtitles / hardcoded markers
+  if (verdict === 'sub')     return 90;
+  if (verdict === 'addon')   return 88;
+  if (verdict === 'hard')    return 75;
+  if (verdict === 'audio')   return 60;
+  if (verdict === 'multi')   return 50;
+  if (verdict === 'hardx')   return 40;
+  if (verdict === 'flag')    return 35;
+  return 15; // none
+}
+
 // Score weights (same idea as Anseb): a release that already has your language
 // can outrank a higher resolution that does not.
 const W_RES = { 2160: 40, 1080: 30, 720: 15, 480: 5, 0: 0 };
@@ -771,18 +791,15 @@ function buildStreams(rawList, opts) {
 
     const info = parseRelease(full);
     let verdict = subVerdict(detectSubs(full, lang, s.subtitles));
-    let proof = null;
     const pr = probes && s.url ? probes.get(s.url) : null;
     if (pr && !pr.unknown) {
-      // the real track list beats any guess from the release name
-      proof = probeVerdict(pr, lang);
+      const proof = probeVerdict(pr, lang);
       if (proof.kind === 'psub') verdict = proof.bitmap ? 'psubimg' : 'psub';
       else if (proof.kind === 'paudio') verdict = 'paudio';
       else if (verdict !== 'hard' && verdict !== 'addon') verdict = 'pnone';
     }
-    if (fn) rememberFile(fn, text, verdict === 'psubimg' ? 'psubimg' : (proof && proof.kind));
+    if (fn) rememberFile(fn, text, verdict === 'psubimg' ? 'psubimg' : '');
 
-    // title
     const titleSrc = pickTitleLine(s);
     const base = titleSrc.replace(/\.(mkv|mp4|avi|m4v|ts|wmv|mov)$/i, '');
     const title = base
@@ -810,39 +827,33 @@ function buildStreams(rawList, opts) {
     if (info.size)    q5.push('📦 ' + info.size.toFixed(1) + ' GB');
     if (info.seeders) q5.push('👤 ' + info.seeders);
 
-    const extTail = ext ? ' · external will load' : '';
-    const proofNote = proof && proof.kind === 'psub' && proof.n > 1 ? ' (' + proof.n + ' tracks)' : '';
-    const hasNote = proof && proof.has && proof.has.length ? ' (file has: ' + proof.has.join(' ') + ')' : '';
-    const forcedNote = proof && proof.forcedOnly ? ' (only a forced track)' : '';
-    const subLines = {
-      psub:  '✅ ' + L.flag + ' ' + L.name + ' subs embedded · VERIFIED in file' + proofNote,
-      psubimg: '✅ ' + L.flag + ' ' + L.name + ' subs embedded (image-based) · VERIFIED in file' + proofNote + (ext ? ' · text backup will load' : ''),
-      paudio: '✅ 🗣️ ' + L.flag + ' ' + L.name + ' audio · VERIFIED in file',
-      pnone: '❌ ' + L.name + ' subs NOT in file (checked)' + forcedNote + hasNote + extTail,
-      sub:   '💬 ' + L.flag + ' ' + L.name + ' subs in release name · not verified',
-      addon: '💬 ' + L.flag + ' ' + L.name + ' subs provided',
-      hard:  '🔒 ' + L.flag + ' ' + L.name + ' hardcoded subs',
-      audio: '🗣️ ' + L.flag + ' ' + L.name + ' in release name · not verified',
-      multi: '❔ Multi subs in name · not verified',
-      hardx: '🔒 Hardcoded subs (language unknown)',
-      flag:  '🌐 ' + L.flag + ' ' + L.name + ' tag · not verified',
-      none:  '🚫 No ' + L.name + ' subs found in name' + extTail,
+    // ══════════════════════════════════════════════════════════════
+    // Clean subtitle line: icon + flag + score
+    // ══════════════════════════════════════════════════════════════
+    const pct = subScore(verdict);
+    const ICON = {
+      psub: '✅', psubimg: '✅', paudio: '✅', pnone: '🚫',
+      sub: '💬', addon: '💬', hard: '🔒', audio: '🗣️',
+      multi: '❔', hardx: '🔒', flag: '🌐', none: '🚫',
     };
+    const icon = ICON[verdict] || '🚫';
+    const flag = (verdict === 'multi' || verdict === 'hardx') ? '' : ' ' + L.flag;
+    const subLine = icon + flag + ' ' + pct + '/100';
 
     const lines = ['📁 ' + title];
     if (q3.length) lines.push(q3.join(' '));
     if (q4.length) lines.push(q4.join(' '));
     if (q5.length) lines.push(q5.join(' '));
-    lines.push(subLines[verdict]);
+    lines.push(subLine);
 
     const o = {
       name: head + badge,
       description: lines.join('\n'),
       behaviorHints: Object.assign({}, bh, { bingeGroup: 'stremify-' + (s._source || '') + '-' + info.res }),
     };
-    o.title = o.description; // older Stremio clients read "title"
+    o.title = o.description;
 
-    if (!bh.filename && fn) o.behaviorHints.filename = fn; // lets Stremio pass the file name back to /subtitles
+    if (!bh.filename && fn) o.behaviorHints.filename = fn;
     if (s.url) o.url = s.url;
     else {
       o.infoHash = s.infoHash;
@@ -855,7 +866,7 @@ function buildStreams(rawList, opts) {
   }
 
   return items
-    .filter((x) => x.score > -50) // CAM / telesync releases
+    .filter((x) => x.score > -50)
     .sort((a, b) => b.tier - a.tier || b.score - a.score || b.size - a.size)
     .map((x) => x.o);
 }
