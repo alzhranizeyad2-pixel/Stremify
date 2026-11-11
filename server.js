@@ -18,24 +18,66 @@ const MAX_SOURCES = 8;
 /* Languages                                                           */
 /* ------------------------------------------------------------------ */
 
-const LANGS = {
-  en: { name: 'English',  flag: '🇬🇧', flags: ['🇬🇧', '🇺🇸'], two: ['en'],       words: ['english', 'eng'],
-        subTags: ['esub', 'esubs'], audioTags: [] },
-  ar: { name: 'Arabic',   flag: '🇸🇦', flags: ['🇸🇦', '🇦🇪', '🇪🇬'], two: ['ar'], words: ['arabic', 'ara', 'arab', 'arabe', 'عربي', 'عربى', 'عربية', 'العربية'],
-        subTags: [], audioTags: [] },
-  de: { name: 'German',   flag: '🇩🇪', flags: ['🇩🇪'],       two: ['de'],       words: ['german', 'ger', 'deu', 'deutsch', 'allemand'],
-        subTags: [], audioTags: [] },
-  fr: { name: 'French',   flag: '🇫🇷', flags: ['🇫🇷'],       two: ['fr'],       words: ['french', 'fre', 'fra', 'francais', 'français', 'truefrench'],
-        subTags: ['vostfr', 'stfr', 'subfrench', 'vost'], audioTags: ['vf', 'vff', 'vfq', 'vfi', 'vf2'] },
-  es: { name: 'Spanish',  flag: '🇪🇸', flags: ['🇪🇸'],       two: ['es'],       words: ['spanish', 'spa', 'esp', 'espanol', 'español', 'castellano', 'latino'],
-        subTags: ['vose'], audioTags: [] },
-  tr: { name: 'Turkish',  flag: '🇹🇷', flags: ['🇹🇷'],       two: ['tr'],       words: ['turkish', 'tur', 'türkçe', 'turkce'],
-        subTags: [], audioTags: [] },
-  hi: { name: 'Hindi',    flag: '🇮🇳', flags: ['🇮🇳'],       two: ['hi'],       words: ['hindi', 'hin'],
-        subTags: [], audioTags: [] },
-  ja: { name: 'Japanese', flag: '🇯🇵', flags: ['🇯🇵'],       two: ['ja', 'jp'], words: ['japanese', 'jpn', 'jap', '日本語'],
-        subTags: [], audioTags: [] },
-};
+// c=code, n=name, f=flags, w=full/native names (trusted anywhere in a release name),
+// t=3-letter codes, two=extra 2-letter codes, st=single-token "subs in X" tags, at=audio tags
+const LANG_DEFS = [
+  { c: 'en', n: 'English',    f: ['🇬🇧', '🇺🇸'], w: ['english', 'eng', 'inglese', 'ingles', 'inglés', 'английский'], st: ['esub', 'esubs'] },
+  { c: 'ar', n: 'Arabic',     f: ['🇸🇦', '🇦🇪', '🇪🇬'], w: ['arabic', 'ara', 'arab', 'arabe', 'arabo', 'عربي', 'عربى', 'عربية', 'عربيه', 'العربية', 'العربيه', 'арабский'] },
+  { c: 'de', n: 'German',     f: ['🇩🇪'], w: ['german', 'ger', 'deu', 'deutsch', 'allemand', 'tedesco', 'немецкий'] },
+  { c: 'fr', n: 'French',     f: ['🇫🇷'], w: ['french', 'fre', 'fra', 'francais', 'français', 'truefrench', 'francese', 'французский'],
+    st: ['vostfr', 'stfr', 'subfrench', 'vost'], at: ['vf', 'vff', 'vfq', 'vfi', 'vf2'] },
+  { c: 'es', n: 'Spanish',    f: ['🇪🇸', '🇲🇽'], w: ['spanish', 'spa', 'esp', 'espanol', 'español', 'castellano', 'latino', 'spagnolo', 'испанский'], st: ['vose'] },
+  { c: 'tr', n: 'Turkish',    f: ['🇹🇷'], w: ['turkish', 'tur', 'türkçe', 'turkce', 'turco', 'турецкий'] },
+  { c: 'hi', n: 'Hindi',      f: ['🇮🇳'], w: ['hindi', 'hin', 'हिन्दी', 'हिंदी'] },
+  { c: 'ja', n: 'Japanese',   f: ['🇯🇵'], w: ['japanese', 'jpn', 'jap', '日本語', 'giapponese', 'японский'], two: ['jp'] },
+  { c: 'pt', n: 'Portuguese', f: ['🇵🇹', '🇧🇷'], w: ['portuguese', 'portugues', 'português', 'brazilian', 'ptbr', 'portugues-br', 'português-br', 'portoghese', 'португальский'],
+    t: ['por', 'pob'], two: ['pb'], st: ['legendado', 'legendas'], at: ['dublado'] },
+  { c: 'it', n: 'Italian',    f: ['🇮🇹'], w: ['italian', 'italiano', 'italien', 'итальянский'], t: ['ita'], st: ['subita', 'vostit', 'sottotitolato'] },
+  { c: 'ru', n: 'Russian',    f: ['🇷🇺'], w: ['russian', 'russkiy', 'русский', 'русские', 'русская', 'russo'], t: ['rus'], st: ['rusub'] },
+  { c: 'zh', n: 'Chinese',    f: ['🇨🇳', '🇹🇼', '🇭🇰'], w: ['chinese', 'mandarin', 'cantonese', 'chs', 'cht', '中文', '简体', '簡體', '繁體', '繁体', 'cinese', 'китайский'],
+    t: ['chi', 'zho', 'cmn', 'yue'], two: ['zh-hans', 'zh-hant'], st: ['chssub', 'chtsub'] },
+  { c: 'ko', n: 'Korean',     f: ['🇰🇷'], w: ['korean', '한국어', 'coreano', 'корейский'], t: ['kor'] },
+  { c: 'nl', n: 'Dutch',      f: ['🇳🇱', '🇧🇪'], w: ['dutch', 'nederlands', 'olandese', 'нидерландский', 'flemish'], t: ['dut', 'nld'] },
+  { c: 'pl', n: 'Polish',     f: ['🇵🇱'], w: ['polish', 'polski', 'polacco', 'польский'], t: ['pol'], st: ['napisy'] },
+  { c: 'sv', n: 'Swedish',    f: ['🇸🇪'], w: ['swedish', 'svenska', 'svedese'], t: ['swe'] },
+  { c: 'da', n: 'Danish',     f: ['🇩🇰'], w: ['danish', 'dansk'], t: ['dan'] },
+  { c: 'no', n: 'Norwegian',  f: ['🇳🇴'], w: ['norwegian', 'norsk', 'norvegese'], t: ['nor', 'nob', 'nno'], two: ['nb', 'nn'] },
+  { c: 'fi', n: 'Finnish',    f: ['🇫🇮'], w: ['finnish', 'suomi'], t: ['fin'] },
+  { c: 'el', n: 'Greek',      f: ['🇬🇷'], w: ['greek', 'ελληνικά', 'greco'], t: ['gre', 'ell'] },
+  { c: 'he', n: 'Hebrew',     f: ['🇮🇱'], w: ['hebrew', 'עברית', 'ebraico'], t: ['heb'], two: ['iw'] },
+  { c: 'fa', n: 'Persian',    f: ['🇮🇷'], w: ['persian', 'farsi', 'فارسی', 'فارسي', 'персидский'], t: ['per', 'fas'] },
+  { c: 'ur', n: 'Urdu',       f: ['🇵🇰'], w: ['urdu', 'اردو'], t: ['urd'] },
+  { c: 'bn', n: 'Bengali',    f: ['🇧🇩'], w: ['bengali', 'bangla', 'বাংলা'], t: ['ben'] },
+  { c: 'ta', n: 'Tamil',      f: ['🇮🇳'], w: ['tamil', 'தமிழ்'], t: ['tam'] },
+  { c: 'te', n: 'Telugu',     f: ['🇮🇳'], w: ['telugu', 'తెలుగు'], t: ['tel'] },
+  { c: 'ml', n: 'Malayalam',  f: ['🇮🇳'], w: ['malayalam', 'മലയാളം'], t: ['mal'] },
+  { c: 'id', n: 'Indonesian', f: ['🇮🇩'], w: ['indonesian', 'indonesia', 'bahasa'], t: ['ind'], two: ['in'] },
+  { c: 'ms', n: 'Malay',      f: ['🇲🇾'], w: ['malay', 'melayu'], t: ['may', 'msa'] },
+  { c: 'th', n: 'Thai',       f: ['🇹🇭'], w: ['thai', 'ไทย'], t: ['tha'] },
+  { c: 'vi', n: 'Vietnamese', f: ['🇻🇳'], w: ['vietnamese', 'tiếng việt', 'vietnamita'], t: ['vie'] },
+  { c: 'cs', n: 'Czech',      f: ['🇨🇿'], w: ['czech', 'cesky', 'česky', 'čeština', 'cestina'], t: ['cze', 'ces'], st: ['titulky'] },
+  { c: 'sk', n: 'Slovak',     f: ['🇸🇰'], w: ['slovak', 'slovensky', 'slovenčina'], t: ['slo', 'slk'] },
+  { c: 'hu', n: 'Hungarian',  f: ['🇭🇺'], w: ['hungarian', 'magyar'], t: ['hun'] },
+  { c: 'ro', n: 'Romanian',   f: ['🇷🇴'], w: ['romanian', 'romana', 'română'], t: ['rum', 'ron'] },
+  { c: 'bg', n: 'Bulgarian',  f: ['🇧🇬'], w: ['bulgarian', 'български'], t: ['bul'] },
+  { c: 'uk', n: 'Ukrainian',  f: ['🇺🇦'], w: ['ukrainian', 'українська', 'украинский'], t: ['ukr'] },
+  { c: 'hr', n: 'Croatian',   f: ['🇭🇷'], w: ['croatian', 'hrvatski'], t: ['hrv'] },
+  { c: 'sr', n: 'Serbian',    f: ['🇷🇸'], w: ['serbian', 'srpski', 'српски'], t: ['srp'] },
+  { c: 'sl', n: 'Slovenian',  f: ['🇸🇮'], w: ['slovenian', 'slovenščina', 'slovene'], t: ['slv'] },
+  { c: 'lt', n: 'Lithuanian', f: ['🇱🇹'], w: ['lithuanian', 'lietuvių'], t: ['lit'] },
+  { c: 'lv', n: 'Latvian',    f: ['🇱🇻'], w: ['latvian', 'latviešu'], t: ['lav'] },
+  { c: 'et', n: 'Estonian',   f: ['🇪🇪'], w: ['estonian', 'eesti'], t: ['est'] },
+  { c: 'ca', n: 'Catalan',    f: ['🇪🇸'], w: ['catalan', 'català', 'catala'], t: ['cat'] },
+];
+
+const LANGS = {};
+for (const d of LANG_DEFS) {
+  LANGS[d.c] = {
+    name: d.n, flag: d.f[0], flags: d.f,
+    words: d.w || [], three: d.t || [], two: [d.c].concat(d.two || []),
+    subTags: d.st || [], audioTags: d.at || [],
+  };
+}
 
 const DEBRID = {
   realdebrid: 'RD+',
@@ -48,14 +90,21 @@ const DEBRID = {
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
 // Lookup tables (null-prototype so tokens like "constructor" never match)
-const STRONG = Object.create(null);   // full names + 3-letter codes
-const WEAK = Object.create(null);     // 2-letter codes (only trusted next to a "sub" word)
+const STRONG = Object.create(null);   // full / native names (safe anywhere in a release name)
+const WEAK = Object.create(null);     // short codes (only trusted right next to a "sub" word)
+const CODE = Object.create(null);     // every ISO code, for exact track-language matching
 const SUBTAG = Object.create(null);   // single-token "subs in language X" tags
 const AUDIOTAG = Object.create(null); // single-token "audio in language X" tags
+// Short codes that are also common English words: never trusted inside release names.
+const RISKY_SHORT = new Set(['it', 'no', 'he', 'is', 'id', 'ms', 'me', 'in', 'iw', 'nb', 'nn']);
+// 3-letter codes that are also common first names / words: never used as audio tags.
+const AMBIG3 = new Set(['dan', 'ben', 'tam', 'tel', 'mal', 'ind', 'nor', 'fin', 'pol', 'est', 'lit', 'cat', 'may', 'per', 'tha']);
 for (const code of Object.keys(LANGS)) {
   const L = LANGS[code];
   L.words.forEach((w) => { STRONG[w] = code; });
-  L.two.forEach((w) => { WEAK[w] = code; });
+  L.two.forEach((w) => { CODE[w] = code; if (!RISKY_SHORT.has(w)) WEAK[w] = code; });
+  L.three.forEach((w) => { CODE[w] = code; WEAK[w] = code; if (!AMBIG3.has(w)) AUDIOTAG[w] = code; });
+  L.words.filter((w) => /^[a-z]{3}$/.test(w)).forEach((w) => { CODE[w] = code; });
   L.subTags.forEach((w) => { SUBTAG[w] = code; });
   L.audioTags.forEach((w) => { AUDIOTAG[w] = code; });
 }
@@ -137,7 +186,9 @@ async function req(url, headers, ms, hops) {
 const getJSON = async (url, headers, ms) => JSON.parse(await req(url, headers, ms));
 
 // Read only the first `bytes` of a remote file (Range request, redirects re-checked).
-async function fetchHead(url, bytes, ms, hops) {
+async function fetchHead(url, bytes, ms) { return fetchRange(url, 0, bytes, ms); }
+
+async function fetchRange(url, start, bytes, ms, hops) {
   hops = hops || 0;
   const u = new URL(url);
   if (!protoOk(u.protocol)) throw new Error('https only');
@@ -146,16 +197,17 @@ async function fetchHead(url, bytes, ms, hops) {
   const id = setTimeout(() => ctrl.abort(), ms || 7000);
   try {
     const r = await fetch(u.href, {
-      headers: { 'User-Agent': UA, 'Range': 'bytes=0-' + (bytes - 1) },
+      headers: { 'User-Agent': UA, 'Range': 'bytes=' + start + '-' + (start + bytes - 1) },
       redirect: 'manual',
       signal: ctrl.signal,
     });
     if (r.status >= 300 && r.status < 400) {
       const loc = r.headers.get('location');
       if (!loc || hops >= 3) throw new Error('bad redirect');
-      return await fetchHead(new URL(loc, u).href, bytes, ms, hops + 1);
+      return await fetchRange(new URL(loc, u).href, start, bytes, ms, hops + 1);
     }
     if (r.status !== 200 && r.status !== 206) throw new Error('HTTP ' + r.status);
+    if (start > 0 && r.status !== 206) throw new Error('range not supported');
     if (!r.body) throw new Error('no body');
     const reader = r.body.getReader();
     const chunks = [];
@@ -252,6 +304,13 @@ function parseGroup(titleSrc) {
 const looksRel = (s) => !!s && s.length > 8 &&
   /\d{3,4}p|web|blu-?ray|hdtv|x26[45]|hevc|\b(19|20)\d{2}\b|s\d{1,2}e\d{1,3}/i.test(s);
 
+function urlFilename(u) {
+  try {
+    const p = decodeURIComponent(new URL(u).pathname.split('/').pop() || '');
+    return /\.(mkv|mp4|avi|m4v|ts|wmv|mov|webm)$/i.test(p) ? p : '';
+  } catch (e) { return ''; }
+}
+
 function pickTitleLine(s) {
   const fn = s.behaviorHints && s.behaviorHints.filename;
   if (fn) return String(fn);
@@ -277,7 +336,11 @@ function pickTitleLine(s) {
     addon       the source stream itself ships a subtitle in that language
 */
 
-const SUB_MARK = new Set(['sub', 'subs', 'subbed', 'subtitle', 'subtitles', 'subtitled', 'softsub', 'softsubs']);
+const SUB_MARK = new Set(['sub', 'subs', 'subbed', 'subtitle', 'subtitles', 'subtitled', 'softsub', 'softsubs',
+  // other languages: "subtitles" / "subtitled" as written in release names
+  'legendado', 'legendas', 'legenda', 'subtitulado', 'subtitulada', 'subtitulos', 'subtítulos', 'sottotitoli', 'sottotitolato',
+  'untertitel', 'untertitelt', 'ondertiteld', 'ondertitels', 'napisy', 'altyazi', 'altyazı', 'altyazılı', 'titulky',
+  'felirat', 'feliratos', 'subtitrat', 'subtitrari', 'субтитры', 'сабы', 'ترجمة', 'مترجم', 'مترجمة', 'sous-titres']);
 const HARD_MARK = new Set(['hardsub', 'hardsubs', 'hardsubbed', 'hardcoded', 'hardcode', 'hc']);
 const MULTI_TOK = new Set(['multi', 'msub', 'msubs', 'multisub', 'multisubs', 'multisubtitle', 'multisubtitles',
   'multiaudio', 'multilang', 'multilanguage']);
@@ -290,8 +353,10 @@ const tokenize = (line) =>
 const langOfToken = (t, weak) => STRONG[t] || (weak ? WEAK[t] : '') || '';
 
 function langMatches(code, lang) {
-  const c = String(code || '').toLowerCase().split(/[-_]/)[0];
-  return STRONG[c] === lang || WEAK[c] === lang;
+  const full = String(code || '').toLowerCase().trim();
+  if (CODE[full] === lang) return true;
+  const c = full.split(/[-_]/)[0];
+  return CODE[c] === lang || STRONG[c] === lang;
 }
 
 // Single token such as "arsub", "engsubs", "subara", "vostfr", "esub".
@@ -369,6 +434,8 @@ function detectSubs(text, lang, extSubs) {
   if (!L) return res;
   const raw = String(text || '');
   for (const line of raw.split(/\r?\n/)) scanLine(tokenize(line), lang, res);
+  if (/字幕|자막/.test(raw) &&
+      L.words.some((w) => w.length >= 2 && /[^\x00-\x7f]/.test(w) && raw.includes(w))) res.sub = true;
   if (L.flags.some((f) => raw.includes(f))) res.flag = true;
   if (Array.isArray(extSubs) && extSubs.some((x) => x && langMatches(x.lang, lang))) res.addon = true;
   return res;
@@ -388,7 +455,11 @@ function subVerdict(r) {
 // can outrank a higher resolution that does not.
 const W_RES = { 2160: 40, 1080: 30, 720: 15, 480: 5, 0: 0 };
 const W_SRC = { 'BluRay REMUX': 25, 'BluRay': 20, 'WEB-DL': 18, 'WEBRip': 12, 'HDTV': 8, 'DVD': 2, 'CAM': -200, '': 0 };
-const W_SUB = { psub: 50, paudio: 45, sub: 35, addon: 35, audio: 30, hard: 25, flag: 15, multi: 5, hardx: 0, none: 0, pnone: -5 };
+const W_SUB = { psub: 50, paudio: 45, psubimg: 40, sub: 35, addon: 35, audio: 30, hard: 25, flag: 15, multi: 5, hardx: 0, none: 0, pnone: -5 };
+// Tier first, score second: a file whose embedded subtitle/audio is VERIFIED in your language always sits above
+// everything else, whatever its resolution. Image-based tracks (PGS/VobSub) rank just below text tracks because
+// many players cannot draw them.
+const TIER = { psub: 4, paudio: 4, psubimg: 3, sub: 2, addon: 2, hard: 2, audio: 2, flag: 1, multi: 1, hardx: 1, none: 1, pnone: 0 };
 
 function scoreStream(info, verdict) {
   let v = (W_RES[info.res] || 0) + (W_SRC[info.source] || 0) + (W_SUB[verdict] || 0);
@@ -466,7 +537,7 @@ function readTracks(b, s, e) {
       else if (i === 0x86) t.codec = ebmlStr(b, s2, e2);
       else if (i === 0x55AA) t.forced = ebmlUint(b, s2, e2) === 1;
     });
-    if (/forced/i.test(t.name)) t.forced = true;
+    if (/forced|\bsigns?\b|\bsongs?\b|commentary|karaoke/i.test(t.name)) t.forced = true;
     t.bitmap = /PGS|VOBSUB|DVBSUB|HDMV/i.test(t.codec);
     if (t.type === 17) out.subs.push(t);
     else if (t.type === 2) out.audio.push(t);
@@ -474,10 +545,10 @@ function readTracks(b, s, e) {
   return out;
 }
 
-// Returns { subs, audio } or null when the file is not MKV / Tracks could not be read in full.
+// Returns { subs, audio }, { incomplete: true } (MKV, but Tracks not fully inside this buffer), or null (not MKV).
 function mkvTracks(b) {
   if (!b || b.length < 64 || b.readUInt32BE(0) !== 0x1a45dfa3) return null;
-  let result = null;
+  let result = { incomplete: true };
   ebmlWalk(b, 0, b.length, (id, ds, de) => {
     if (id !== 0x18538067) return; // skip the EBML header, enter Segment
     ebmlWalk(b, ds, de, (id2, ds2, de2, trunc2) => {
@@ -489,6 +560,90 @@ function mkvTracks(b) {
     return false;
   });
   return result;
+}
+
+/* ---- MP4 / M4V / MOV: read the 'moov' box ---- */
+
+function mp4Box(b, p, end) {
+  if (p + 8 > end) return null;
+  let size = b.readUInt32BE(p);
+  const type = b.toString('latin1', p + 4, p + 8);
+  let hdr = 8;
+  if (size === 1) {
+    if (p + 16 > end) return null;
+    size = Number(b.readBigUInt64BE(p + 8));
+    hdr = 16;
+  } else if (size === 0) size = end - p;
+  return size < hdr ? null : { type, hdr, size, start: p };
+}
+
+function mp4Each(b, s, e, cb) {
+  let p = s;
+  while (p < e) {
+    const x = mp4Box(b, p, e);
+    if (!x) return;
+    if (cb(x.type, p + x.hdr, Math.min(p + x.size, e)) === false) return;
+    p += x.size;
+  }
+}
+
+function mp4Find(b, s, e, type) {
+  let r = null;
+  mp4Each(b, s, e, (t, ds, de) => { if (t === type) { r = [ds, de]; return false; } });
+  return r;
+}
+
+function mp4Lang(v) {
+  if (!v || v === 0x55c4) return 'und';
+  return String.fromCharCode(((v >> 10) & 31) + 0x60, ((v >> 5) & 31) + 0x60, (v & 31) + 0x60);
+}
+
+function parseMoov(b, s, e) {
+  const out = { subs: [], audio: [] };
+  mp4Each(b, s, e, (type, ds, de) => {
+    if (type !== 'trak') return;
+    const mdia = mp4Find(b, ds, de, 'mdia');
+    if (!mdia) return;
+    let handler = '', lang = 'und', codec = '';
+    mp4Each(b, mdia[0], mdia[1], (t2, s2, e2) => {
+      if (t2 === 'hdlr' && e2 - s2 >= 12) handler = b.toString('latin1', s2 + 8, s2 + 12);
+      else if (t2 === 'mdhd' && e2 - s2 >= 24) {
+        const v1 = b[s2] === 1;
+        const off = v1 ? s2 + 32 : s2 + 20;
+        if (off + 2 <= e2) lang = mp4Lang(b.readUInt16BE(off));
+      } else if (t2 === 'minf') {
+        const stbl = mp4Find(b, s2, e2, 'stbl');
+        const stsd = stbl && mp4Find(b, stbl[0], stbl[1], 'stsd');
+        if (stsd && stsd[1] - stsd[0] >= 16) codec = b.toString('latin1', stsd[0] + 12, stsd[0] + 16);
+      }
+    });
+    let name = '';
+    const udta = mp4Find(b, ds, de, 'udta');
+    const nm = udta && mp4Find(b, udta[0], udta[1], 'name');
+    if (nm) name = b.toString('utf8', nm[0], nm[1]).replace(/[\0-\x1f]+/g, '');
+    const t = { type: 0, lang, bcp: '', name, codec, forced: /forced|\bsigns?\b|commentary/i.test(name), bitmap: /^(subp|dvds)$/i.test(codec) };
+    if (handler === 'sbtl' || handler === 'subt' || handler === 'text') out.subs.push(t);
+    else if (handler === 'soun') out.audio.push(t);
+  });
+  return out;
+}
+
+// -> { tracks } | { nextAt, need } (offset of the next top-level box we still have to read) | {}
+function mp4Scan(b) {
+  let p = 0;
+  let nextAt = null;
+  while (p + 8 <= b.length) {
+    const x = mp4Box(b, p, b.length);
+    if (!x) return {};
+    if (x.type === 'moov') {
+      if (p + x.size <= b.length) return { tracks: parseMoov(b, p + x.hdr, p + x.size) };
+      return { nextAt: p, need: x.size };
+    }
+    if (x.size >= 0x7fffffffffff) return {};
+    p += x.size;
+    nextAt = p;
+  }
+  return { nextAt };
 }
 
 function trackMatches(t, lang) {
@@ -517,13 +672,34 @@ function probeVerdict(p, lang) {
 const CACHED_RE = /\[\w{1,3}\+\]|⚡|cached|instant/i;
 const probeCache = new Map();
 
+async function probeMp4(url, first) {
+  let buf = first;
+  let base = 0;
+  for (let hop = 0; hop < 4; hop++) {
+    const r = mp4Scan(buf);
+    if (r.tracks) return r.tracks;
+    if (r.nextAt == null) return null;
+    base += r.nextAt;
+    buf = await fetchRange(url, base, Math.min(8 * 1024 * 1024, Math.max(2 * 1024 * 1024, (r.need || 0) + 64)), 8000);
+    if (buf.length < 16) return null;
+  }
+  return null;
+}
+
 async function probeOne(url) {
   const k = sha(url);
   const hit = probeCache.get(k);
   if (hit && Date.now() - hit.t < (hit.v.unknown ? 30 * 60e3 : 6 * 3600e3)) return hit.v;
-  let v;
+  let v = { unknown: true };
   try {
-    v = mkvTracks(await fetchHead(url, PROBE_BYTES, 7000)) || { unknown: true };
+    let head = await fetchHead(url, PROBE_BYTES, 6000);
+    if (head.length >= 64 && head.readUInt32BE(0) === 0x1a45dfa3) {
+      let t = mkvTracks(head);
+      if (t && t.incomplete) { head = await fetchHead(url, 2 * 1024 * 1024, 8000); t = mkvTracks(head); }
+      if (t && !t.incomplete) v = t;
+    } else if (head.length >= 16 && head.toString('latin1', 4, 8) === 'ftyp') {
+      v = (await probeMp4(url, head)) || v;
+    }
   } catch (e) { v = { unknown: true }; }
   probeCache.set(k, { t: Date.now(), v });
   if (probeCache.size > 2000) probeCache.delete(probeCache.keys().next().value);
@@ -537,7 +713,7 @@ async function probeStreams(raw) {
     if (!s || !s.url || urls.includes(s.url)) continue;
     if (!CACHED_RE.test(String(s.name || ''))) continue;
     urls.push(s.url);
-    if (urls.length >= 16) break;
+    if (urls.length >= 24) break;
   }
   if (!urls.length) return out;
   const jobs = urls.map(async (u) => { out.set(u, await probeOne(u)); });
@@ -589,7 +765,7 @@ function buildStreams(rawList, opts) {
     seen.add(dk);
 
     const bh = s.behaviorHints || {};
-    const fn = bh.filename ? String(bh.filename) : '';
+    const fn = bh.filename ? String(bh.filename) : (s.url ? urlFilename(s.url) : '');
     const text = [s.name, s.title, s.description].filter(Boolean).join('\n');
     const full = text + '\n' + fn;
 
@@ -600,10 +776,11 @@ function buildStreams(rawList, opts) {
     if (pr && !pr.unknown) {
       // the real track list beats any guess from the release name
       proof = probeVerdict(pr, lang);
-      if (proof.kind === 'psub' || proof.kind === 'paudio') verdict = proof.kind;
+      if (proof.kind === 'psub') verdict = proof.bitmap ? 'psubimg' : 'psub';
+      else if (proof.kind === 'paudio') verdict = 'paudio';
       else if (verdict !== 'hard' && verdict !== 'addon') verdict = 'pnone';
     }
-    if (fn) rememberFile(fn, text, proof && proof.kind);
+    if (fn) rememberFile(fn, text, verdict === 'psubimg' ? 'psubimg' : (proof && proof.kind));
 
     // title
     const titleSrc = pickTitleLine(s);
@@ -634,13 +811,12 @@ function buildStreams(rawList, opts) {
     if (info.seeders) q5.push('👤 ' + info.seeders);
 
     const extTail = ext ? ' · external will load' : '';
-    const proofNote = proof && proof.kind === 'psub'
-      ? (proof.n > 1 ? ' (' + proof.n + ' tracks)' : '') + (proof.bitmap ? ' · image-based' : '')
-      : '';
+    const proofNote = proof && proof.kind === 'psub' && proof.n > 1 ? ' (' + proof.n + ' tracks)' : '';
     const hasNote = proof && proof.has && proof.has.length ? ' (file has: ' + proof.has.join(' ') + ')' : '';
     const forcedNote = proof && proof.forcedOnly ? ' (only a forced track)' : '';
     const subLines = {
       psub:  '✅ ' + L.flag + ' ' + L.name + ' subs embedded · VERIFIED in file' + proofNote,
+      psubimg: '✅ ' + L.flag + ' ' + L.name + ' subs embedded (image-based) · VERIFIED in file' + proofNote + (ext ? ' · text backup will load' : ''),
       paudio: '✅ 🗣️ ' + L.flag + ' ' + L.name + ' audio · VERIFIED in file',
       pnone: '❌ ' + L.name + ' subs NOT in file (checked)' + forcedNote + hasNote + extTail,
       sub:   '💬 ' + L.flag + ' ' + L.name + ' subs in release name · not verified',
@@ -666,6 +842,7 @@ function buildStreams(rawList, opts) {
     };
     o.title = o.description; // older Stremio clients read "title"
 
+    if (!bh.filename && fn) o.behaviorHints.filename = fn; // lets Stremio pass the file name back to /subtitles
     if (s.url) o.url = s.url;
     else {
       o.infoHash = s.infoHash;
@@ -674,12 +851,12 @@ function buildStreams(rawList, opts) {
     }
     if (Array.isArray(s.subtitles)) o.subtitles = s.subtitles;
 
-    items.push({ o, score: scoreStream(info, verdict), size: info.size });
+    items.push({ o, score: scoreStream(info, verdict), tier: TIER[verdict] || 0, size: info.size });
   }
 
   return items
     .filter((x) => x.score > -50) // CAM / telesync releases
-    .sort((a, b) => b.score - a.score || b.size - a.size)
+    .sort((a, b) => b.tier - a.tier || b.score - a.score || b.size - a.size)
     .map((x) => x.o);
 }
 
@@ -705,6 +882,7 @@ function decodeConfig(tok) {
       key: String(c.key || '').slice(0, 200),
       ext: c.ext !== false,
       verify: c.verify !== false,
+      pure: c.pure !== false,
     };
   } catch (e) { return {}; }
 }
@@ -712,9 +890,9 @@ function decodeConfig(tok) {
 function buildManifest() {
   return {
     id: 'com.stremify.addon',
-    version: '6.0.0',
+    version: '7.0.0',
     name: 'Stremify',
-    description: 'Multi-source stream addon that detects embedded subtitles for your preferred language.',
+    description: 'Multi-source stream addon that verifies embedded subtitles (MKV + MP4) for your language and ranks those files first.',
     resources: ['stream', 'subtitles'],
     types: ['movie', 'series'],
     idPrefixes: ['tt'],
@@ -824,7 +1002,12 @@ async function handleSubtitles(res, tok, type, id, extraRaw) {
     const known = fileTexts.get(fn) || {};
     const r = detectSubs((known.text || '') + '\n' + fn, lang, null);
     if (r.hard) return send(res, 200, { subtitles: [] });
-    if (known.proof === 'psub' || known.proof === 'paudio') max = 1;      // verified in file
+    if (known.proof === 'psub' || known.proof === 'paudio') {
+      // Verified text track / language audio inside the file: add NOTHING external, so the player's own
+      // subtitle-language setting lands on the embedded track instead of an external one.
+      if (cfg.pure !== false) return send(res, 200, { subtitles: [] });
+      max = 1;
+    } else if (known.proof === 'psubimg') max = 1;                         // image-only track: keep one text backup
     else if (!known.proof && (r.sub || r.audio)) max = 1;                  // name-based guess
   }
 
@@ -860,6 +1043,10 @@ async function handler(rq, res) {
   if (pathname.startsWith('/public/')) return serveStatic(res, pathname.slice('/public/'.length));
 
   if (pathname === '/manifest.json') return send(res, 200, buildManifest());
+  if (pathname === '/languages.json') {
+    return send(res, 200, Object.keys(LANGS).map((c) => ({ code: c, name: LANGS[c].name, flag: LANGS[c].flag })),
+      { 'Cache-Control': 'public, max-age=3600' });
+  }
 
   const m1 = pathname.match(/^\/c\/([\w-]+)\/manifest\.json$/);
   if (m1) return send(res, 200, buildManifest());
@@ -885,4 +1072,5 @@ if (require.main === module) {
   http.createServer((rq, rs) => handler(rq, rs).catch((e) => send(rs, 500, { error: e.message })))
     .listen(PORT, () => console.log('Stremify on ' + PORT));
 }
-module.exports = { handler, LANGS, DEBRID, detectSubs, subVerdict, buildStreams, encodeConfig, decodeConfig };
+module.exports = { handler, LANGS, DEBRID, detectSubs, subVerdict, buildStreams, encodeConfig, decodeConfig,
+  mkvTracks, mp4Scan, probeVerdict, langMatches };

@@ -263,22 +263,58 @@
 
 <section class="card">
   <h2><span class="num">2</span>Preferred Subtitle Language</h2>
-  <p class="hint">Each release is scanned for embedded or hardcoded subtitles in this language and labelled. If none is found, an external subtitle can be attached automatically.</p>
+  <p class="hint">Each file is opened and its real track list is read (MKV and MP4), so you see ✅ <b>verified</b> when your language is truly embedded. Verified files are ranked first. In Stremio also set <b>Settings → Player → Subtitles language</b> to the same language so the player selects the embedded track.</p>
 
   <div class="dd" id="langDD" data-value="en">
     <button type="button" class="dd-btn" aria-haspopup="listbox" aria-expanded="false">
-      <img class="dd-ico" alt="">
-      <span class="label">English</span>
+      <img class="dd-ico" alt="" style="display:none">
+      <span class="label">🇬🇧 English</span>
     </button>
     <div class="dd-menu" role="listbox">
-      <div class="dd-item" role="option" data-value="en" data-icon="https://dima.tools/emoji_to_png/i/i229YjpsEZ9_256.png"><img src="https://dima.tools/emoji_to_png/i/i229YjpsEZ9_256.png" alt=""><span>English</span></div>
-      <div class="dd-item" role="option" data-value="ar" data-icon="https://dima.tools/emoji_to_png/i/g3FN4NDKC8C_256.png"><img src="https://dima.tools/emoji_to_png/i/g3FN4NDKC8C_256.png" alt=""><span>Arabic</span></div>
-      <div class="dd-item" role="option" data-value="de" data-icon="https://dima.tools/emoji_to_png/i/Kcq2keEebw6_256.png"><img src="https://dima.tools/emoji_to_png/i/Kcq2keEebw6_256.png" alt=""><span>German</span></div>
-      <div class="dd-item" role="option" data-value="fr" data-icon="https://dima.tools/emoji_to_png/i/hboBSWFAj54_256.png"><img src="https://dima.tools/emoji_to_png/i/hboBSWFAj54_256.png" alt=""><span>French</span></div>
-      <div class="dd-item" role="option" data-value="es" data-icon="https://dima.tools/emoji_to_png/i/VJH3pmHTaVE_256.png"><img src="https://dima.tools/emoji_to_png/i/VJH3pmHTaVE_256.png" alt=""><span>Spanish</span></div>
-      <div class="dd-item" role="option" data-value="tr" data-icon="https://dima.tools/emoji_to_png/i/6c2FqVF2Ah6_256.png"><img src="https://dima.tools/emoji_to_png/i/6c2FqVF2Ah6_256.png" alt=""><span>Turkish</span></div>
-      <div class="dd-item" role="option" data-value="hi" data-icon="https://dima.tools/emoji_to_png/i/ZHrHz5uLTgb_256.png"><img src="https://dima.tools/emoji_to_png/i/ZHrHz5uLTgb_256.png" alt=""><span>Hindi</span></div>
-      <div class="dd-item" role="option" data-value="ja" data-icon="https://dima.tools/emoji_to_png/i/oBH8LYWVCk4_256.png"><img src="https://dima.tools/emoji_to_png/i/oBH8LYWVCk4_256.png" alt=""><span>Japanese</span></div>
+      <div class="dd-item" role="option" data-value="en" data-icon=""><span>🇬🇧 English</span></div>
+      <div class="dd-item" role="option" data-value="ar" data-icon=""><span>🇸🇦 Arabic</span></div>
+      <div class="dd-item" role="option" data-value="de" data-icon=""><span>🇩🇪 German</span></div>
+      <div class="dd-item" role="option" data-value="fr" data-icon=""><span>🇫🇷 French</span></div>
+      <div class="dd-item" role="option" data-value="es" data-icon=""><span>🇪🇸 Spanish</span></div>
+      <div class="dd-item" role="option" data-value="tr" data-icon=""><span>🇹🇷 Turkish</span></div>
+      <div class="dd-item" role="option" data-value="hi" data-icon=""><span>🇮🇳 Hindi</span></div>
+      <div class="dd-item" role="option" data-value="ja" data-icon=""><span>🇯🇵 Japanese</span></div>
+      <div class="dd-item" role="option" data-value="pt" data-icon=""><span>🇵🇹 Portuguese</span></div>
+      <div class="dd-item" role="option" data-value="it" data-icon=""><span>🇮🇹 Italian</span></div>
+      <div class="dd-item" role="option" data-value="ru" data-icon=""><span>🇷🇺 Russian</span></div>
+      <div class="dd-item" role="option" data-value="zh" data-icon=""><span>🇨🇳 Chinese</span></div>
+      <div class="dd-item" role="option" data-value="ko" data-icon=""><span>🇰🇷 Korean</span></div>
+      <div class="dd-item" role="option" data-value="nl" data-icon=""><span>🇳🇱 Dutch</span></div>
+      <div class="dd-item" role="option" data-value="pl" data-icon=""><span>🇵🇱 Polish</span></div>
+      <div class="dd-item" role="option" data-value="sv" data-icon=""><span>🇸🇪 Swedish</span></div>
+      <div class="dd-item" role="option" data-value="da" data-icon=""><span>🇩🇰 Danish</span></div>
+      <div class="dd-item" role="option" data-value="no" data-icon=""><span>🇳🇴 Norwegian</span></div>
+      <div class="dd-item" role="option" data-value="fi" data-icon=""><span>🇫🇮 Finnish</span></div>
+      <div class="dd-item" role="option" data-value="el" data-icon=""><span>🇬🇷 Greek</span></div>
+      <div class="dd-item" role="option" data-value="he" data-icon=""><span>🇮🇱 Hebrew</span></div>
+      <div class="dd-item" role="option" data-value="fa" data-icon=""><span>🇮🇷 Persian</span></div>
+      <div class="dd-item" role="option" data-value="ur" data-icon=""><span>🇵🇰 Urdu</span></div>
+      <div class="dd-item" role="option" data-value="bn" data-icon=""><span>🇧🇩 Bengali</span></div>
+      <div class="dd-item" role="option" data-value="ta" data-icon=""><span>🇮🇳 Tamil</span></div>
+      <div class="dd-item" role="option" data-value="te" data-icon=""><span>🇮🇳 Telugu</span></div>
+      <div class="dd-item" role="option" data-value="ml" data-icon=""><span>🇮🇳 Malayalam</span></div>
+      <div class="dd-item" role="option" data-value="id" data-icon=""><span>🇮🇩 Indonesian</span></div>
+      <div class="dd-item" role="option" data-value="ms" data-icon=""><span>🇲🇾 Malay</span></div>
+      <div class="dd-item" role="option" data-value="th" data-icon=""><span>🇹🇭 Thai</span></div>
+      <div class="dd-item" role="option" data-value="vi" data-icon=""><span>🇻🇳 Vietnamese</span></div>
+      <div class="dd-item" role="option" data-value="cs" data-icon=""><span>🇨🇿 Czech</span></div>
+      <div class="dd-item" role="option" data-value="sk" data-icon=""><span>🇸🇰 Slovak</span></div>
+      <div class="dd-item" role="option" data-value="hu" data-icon=""><span>🇭🇺 Hungarian</span></div>
+      <div class="dd-item" role="option" data-value="ro" data-icon=""><span>🇷🇴 Romanian</span></div>
+      <div class="dd-item" role="option" data-value="bg" data-icon=""><span>🇧🇬 Bulgarian</span></div>
+      <div class="dd-item" role="option" data-value="uk" data-icon=""><span>🇺🇦 Ukrainian</span></div>
+      <div class="dd-item" role="option" data-value="hr" data-icon=""><span>🇭🇷 Croatian</span></div>
+      <div class="dd-item" role="option" data-value="sr" data-icon=""><span>🇷🇸 Serbian</span></div>
+      <div class="dd-item" role="option" data-value="sl" data-icon=""><span>🇸🇮 Slovenian</span></div>
+      <div class="dd-item" role="option" data-value="lt" data-icon=""><span>🇱🇹 Lithuanian</span></div>
+      <div class="dd-item" role="option" data-value="lv" data-icon=""><span>🇱🇻 Latvian</span></div>
+      <div class="dd-item" role="option" data-value="et" data-icon=""><span>🇪🇪 Estonian</span></div>
+      <div class="dd-item" role="option" data-value="ca" data-icon=""><span>🇪🇸 Catalan</span></div>
     </div>
   </div>
 
@@ -289,11 +325,16 @@
 
   <label class="check" for="verify">
     <input type="checkbox" id="verify" checked>
-    <span>Verify embedded subtitles inside the file (debrid links only)</span>
+    <span>Verify embedded subtitles inside the file (cached debrid links only)</span>
+  </label>
+
+  <label class="check" for="pure">
+    <input type="checkbox" id="pure" checked>
+    <span>When an embedded subtitle is verified, add no external subtitle (so the embedded one plays)</span>
   </label>
 
   <div class="legend">
-    💬 embedded subs &nbsp;·&nbsp; 🗣️ language audio/tag &nbsp;·&nbsp; 🔒 hardcoded subs &nbsp;·&nbsp; 🌐 language tag only &nbsp;·&nbsp; 🚫 nothing found
+    ✅ verified in file &nbsp;·&nbsp; 💬 subs named in release &nbsp;·&nbsp; 🗣️ language audio/tag &nbsp;·&nbsp; 🔒 hardcoded subs &nbsp;·&nbsp; 🌐 language tag only &nbsp;·&nbsp; 🚫 nothing found
   </div>
 </section>
 
@@ -464,6 +505,7 @@
         key: $('key').value.trim(),
         ext: $('extSubs').checked,
         verify: $('verify').checked,
+        pure: $('pure').checked,
       },
       bad,
     };
@@ -503,6 +545,7 @@
       if (cfg.key) $('key').value = cfg.key;
       $('extSubs').checked = cfg.ext !== false;
       $('verify').checked = cfg.verify !== false;
+      $('pure').checked = cfg.pure !== false;
     } catch (e) { /* ignore a malformed token */ }
   }
   prefill();
