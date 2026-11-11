@@ -1,18 +1,28 @@
 'use strict';
 const http = require('http');
+const https = require('https');
+const zlib = require('zlib');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const dns = require('dns').promises;
+const dns = require('dns');
 const net = require('net');
 
+const VERSION = require('./package.json').version;
 const PORT = process.env.PORT || 3000;
 const WEB = path.join(__dirname, 'public');
-const UA = 'Stremify/6.0';
+const UA = 'Stremify/' + VERSION;
 const ALLOW_PRIVATE = process.env.ALLOW_PRIVATE_SOURCES === '1';
 const SUBS_PROVIDER = (process.env.SUBS_PROVIDER || 'https://opensubtitles-v3.strem.io').replace(/\/+$/, '');
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_SOURCES = 8;
+// Requests per minute per client IP on /stream and /subtitles (0 = unlimited).
+const RATE_LIMIT = process.env.RATE_LIMIT !== undefined ? Math.max(0, +process.env.RATE_LIMIT || 0) : 120;
+// Set TRUST_PROXY=1 when running behind a reverse proxy (Render, Railway, nginx...) so the real client IP is used.
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+// The debrid key is only ever sent to these hosts (add your own Torrentio mirror via TORRENTIO_HOSTS=a.com,b.com).
+const TORRENTIO_HOSTS = new Set(['torrentio.strem.fun']
+  .concat(String(process.env.TORRENTIO_HOSTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)));
 
 /* ------------------------------------------------------------------ */
 /* Languages                                                           */
@@ -122,9 +132,10 @@ const protoOk = (p) => p === 'https:' || (ALLOW_PRIVATE && p === 'http:');
 
 function isPrivateIp(ip) {
   if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
+    const [a, b, c] = ip.split('.').map(Number);
     return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      (a === 192 && b === 0 && c === 0) || (a === 198 && (b === 18 || b === 19)) ||
       (a === 100 && b >= 64 && b <= 127) || a >= 224;
   }
   const v = String(ip).toLowerCase();
@@ -136,14 +147,15 @@ function isPrivateIp(ip) {
   return /^(fc|fd|fe8|fe9|fea|feb)/.test(v);
 }
 
-async function assertPublicHost(hostname) {
-  if (ALLOW_PRIVATE) return;
-  if (net.isIP(hostname)) {
-    if (isPrivateIp(hostname)) throw new Error('blocked host');
-    return;
-  }
-  const addrs = await dns.lookup(hostname, { all: true });
-  if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) throw new Error('blocked host');
+// DNS guard used by every outgoing socket: the address that is CHECKED is the address that is USED,
+// so a hostname cannot answer "public" to a check and "127.0.0.1" to the real connection (DNS rebinding).
+function guardedLookup(hostname, options, cb) {
+  dns.lookup(hostname, options, (err, address, family) => {
+    if (err) return cb(err);
+    const list = Array.isArray(address) ? address : [{ address, family }];
+    if (!ALLOW_PRIVATE && list.some((a) => isPrivateIp(a.address))) return cb(new Error('blocked host'));
+    cb(null, address, family);
+  });
 }
 
 function safeUrl(u) {
@@ -158,69 +170,97 @@ function safeUrl(u) {
   } catch (e) { return null; }
 }
 
-async function req(url, headers, ms, hops) {
+// One GET with: pinned-DNS private-IP guard, manual redirects (each hop re-checked), transparent decompression
+// and a HARD byte cap enforced while streaming (never buffers more than maxBytes).
+// opts: { headers, ms, maxBytes, partial }  partial=true -> stop quietly at maxBytes instead of failing.
+function httpGet(url, opts, hops) {
   hops = hops || 0;
-  const u = new URL(url);
-  if (!protoOk(u.protocol)) throw new Error('https only');
-  await assertPublicHost(u.hostname);
-  const ctrl = new AbortController();
-  const id = setTimeout(() => ctrl.abort(), ms || 9000);
-  try {
-    const r = await fetch(u.href, {
-      headers: Object.assign({ 'User-Agent': UA, 'Accept': 'application/json' }, headers),
-      redirect: 'manual',
-      signal: ctrl.signal,
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(url); } catch (e) { return reject(new Error('bad url')); }
+    if (!protoOk(u.protocol)) return reject(new Error('https only'));
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    if (!ALLOW_PRIVATE && net.isIP(host) && isPrivateIp(host)) return reject(new Error('blocked host'));
+
+    const maxBytes = opts.maxBytes || MAX_BYTES;
+    let settled = false;
+    let timer = null;
+    let r = null;
+    const done = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(v);
+    };
+    timer = setTimeout(() => { if (r) r.destroy(); done(reject, new Error('timeout')); }, opts.ms || 9000);
+
+    const lib = u.protocol === 'https:' ? https : http;
+    r = lib.request(u, {
+      method: 'GET',
+      agent: false,
+      lookup: guardedLookup,
+      headers: Object.assign({ 'User-Agent': UA, 'Accept-Encoding': 'gzip, deflate, br' }, opts.headers),
+    }, (res) => {
+      const status = res.statusCode || 0;
+      if (status >= 300 && status < 400) {
+        res.resume();
+        const loc = res.headers.location;
+        if (!loc || hops >= 3) return done(reject, new Error('bad redirect'));
+        let next;
+        try { next = new URL(loc, u).href; } catch (e) { return done(reject, new Error('bad redirect')); }
+        return httpGet(next, opts, hops + 1).then((v) => done(resolve, v), (e) => done(reject, e));
+      }
+      if (status < 200 || status >= 300) { res.resume(); return done(reject, new Error('HTTP ' + status)); }
+      if (!opts.partial && (+res.headers['content-length'] || 0) > maxBytes) {
+        res.destroy();
+        return done(reject, new Error('too large'));
+      }
+
+      let stream = res;
+      const enc = String(res.headers['content-encoding'] || '').toLowerCase();
+      if (enc === 'gzip' || enc === 'x-gzip') stream = res.pipe(zlib.createGunzip());
+      else if (enc === 'deflate') stream = res.pipe(zlib.createInflate());
+      else if (enc === 'br') stream = res.pipe(zlib.createBrotliDecompress());
+
+      const chunks = [];
+      let got = 0;
+      const finish = () => done(resolve, { status, headers: res.headers, body: Buffer.concat(chunks) });
+      stream.on('data', (c) => {
+        if (settled) return;
+        got += c.length;
+        if (got > maxBytes) {
+          res.destroy();
+          if (!opts.partial) return done(reject, new Error('too large'));
+          chunks.push(c.subarray(0, c.length - (got - maxBytes)));
+          return finish();
+        }
+        chunks.push(c);
+      });
+      stream.on('end', finish);
+      stream.on('error', (e) => done(reject, e));
+      res.on('error', (e) => done(reject, e));
     });
-    if (r.status >= 300 && r.status < 400) {
-      const loc = r.headers.get('location');
-      if (!loc || hops >= 3) throw new Error('bad redirect');
-      return await req(new URL(loc, u).href, headers, ms, hops + 1);
-    }
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    if ((+r.headers.get('content-length') || 0) > MAX_BYTES) throw new Error('too large');
-    const text = await r.text();
-    if (text.length > MAX_BYTES) throw new Error('too large');
-    return text;
-  } finally { clearTimeout(id); }
+    r.on('error', (e) => done(reject, e));
+    r.end();
+  });
+}
+
+async function req(url, headers, ms) {
+  const r = await httpGet(url, { headers: Object.assign({ 'Accept': 'application/json' }, headers), ms: ms || 9000, maxBytes: MAX_BYTES });
+  return r.body.toString('utf8');
 }
 const getJSON = async (url, headers, ms) => JSON.parse(await req(url, headers, ms));
 
 // Read only the first `bytes` of a remote file (Range request, redirects re-checked).
 async function fetchHead(url, bytes, ms) { return fetchRange(url, 0, bytes, ms); }
 
-async function fetchRange(url, start, bytes, ms, hops) {
-  hops = hops || 0;
-  const u = new URL(url);
-  if (!protoOk(u.protocol)) throw new Error('https only');
-  await assertPublicHost(u.hostname);
-  const ctrl = new AbortController();
-  const id = setTimeout(() => ctrl.abort(), ms || 7000);
-  try {
-    const r = await fetch(u.href, {
-      headers: { 'User-Agent': UA, 'Range': 'bytes=' + start + '-' + (start + bytes - 1) },
-      redirect: 'manual',
-      signal: ctrl.signal,
-    });
-    if (r.status >= 300 && r.status < 400) {
-      const loc = r.headers.get('location');
-      if (!loc || hops >= 3) throw new Error('bad redirect');
-      return await fetchRange(new URL(loc, u).href, start, bytes, ms, hops + 1);
-    }
-    if (r.status !== 200 && r.status !== 206) throw new Error('HTTP ' + r.status);
-    if (start > 0 && r.status !== 206) throw new Error('range not supported');
-    if (!r.body) throw new Error('no body');
-    const reader = r.body.getReader();
-    const chunks = [];
-    let got = 0;
-    while (got < bytes) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(Buffer.from(value));
-      got += value.length;
-    }
-    try { await reader.cancel(); } catch (e) { /* ignore */ }
-    return Buffer.concat(chunks).subarray(0, bytes);
-  } finally { clearTimeout(id); }
+async function fetchRange(url, start, bytes, ms) {
+  const r = await httpGet(url, {
+    headers: { 'Range': 'bytes=' + start + '-' + (start + bytes - 1), 'Accept-Encoding': 'identity' },
+    ms: ms || 7000, maxBytes: bytes, partial: true,
+  });
+  if (start > 0 && r.status !== 206) throw new Error('range not supported');
+  return r.body;
 }
 
 /* ------------------------------------------------------------------ */
@@ -238,10 +278,11 @@ const recall = (k, ttl) => {
   return h && Date.now() - h.t < (ttl || 600000) ? h.v : null;
 };
 
-// filename -> release text, so the subtitles endpoint can re-check a chosen stream
+// language|filename -> release text, so the subtitles endpoint can re-check a chosen stream.
+// The language is part of the key because the verified proof ("subs in YOUR language") differs per user language.
 const fileTexts = new Map();
-function rememberFile(fn, text, proof) {
-  fileTexts.set(fn, { text, proof: proof || '' });
+function rememberFile(lang, fn, text, proof) {
+  fileTexts.set(lang + '|' + fn, { text, proof: proof || '' });
   if (fileTexts.size > 3000) fileTexts.delete(fileTexts.keys().next().value);
 }
 
@@ -452,24 +493,6 @@ function subVerdict(r) {
   return 'none';
 }
 
-
-function subScore(verdict, proof) {
-  // Verified from actual file bytes (MKV Tracks / MP4 moov)
-  if (verdict === 'psub')    return 100;
-  if (verdict === 'paudio')  return 95;
-  if (verdict === 'psubimg') return 85;
-  if (verdict === 'pnone')   return 10;
-
-  // Heuristic from release name / addon subtitles / hardcoded markers
-  if (verdict === 'sub')     return 90;
-  if (verdict === 'addon')   return 88;
-  if (verdict === 'hard')    return 75;
-  if (verdict === 'audio')   return 60;
-  if (verdict === 'multi')   return 50;
-  if (verdict === 'hardx')   return 40;
-  if (verdict === 'flag')    return 35;
-  return 15; // none
-}
 
 // Score weights (same idea as Anseb): a release that already has your language
 // can outrank a higher resolution that does not.
@@ -737,7 +760,9 @@ async function probeStreams(raw) {
   }
   if (!urls.length) return out;
   const jobs = urls.map(async (u) => { out.set(u, await probeOne(u)); });
-  await Promise.race([Promise.allSettled(jobs), new Promise((ok) => setTimeout(ok, 8000))]);
+  let to = null;
+  await Promise.race([Promise.allSettled(jobs), new Promise((ok) => { to = setTimeout(ok, 8000); })]);
+  clearTimeout(to);
   return out;
 }
 
@@ -754,12 +779,17 @@ function withDebrid(base, debrid, key) {
   return u.origin + '/' + segs.join('/');
 }
 
+// Match the hostname exactly: a path/query that merely contains "torrentio" must never receive the key.
+function isTorrentioHost(base) {
+  try { return TORRENTIO_HOSTS.has(new URL(base).hostname.toLowerCase()); } catch (e) { return false; }
+}
+
 async function fetchAllStreams(sources, type, id, debrid, key) {
   const tail = '/stream/' + type + '/' + encodeURIComponent(id) + '.json';
   const tasks = sources.map(async (src) => {
     let base = safeUrl(src.url);
     if (!base) return [];
-    if (debrid && key && /torrentio/i.test(base)) base = withDebrid(base, debrid, key);
+    if (debrid && key && isTorrentioHost(base)) base = withDebrid(base, debrid, key);
     try {
       const d = await getJSON(base + tail, null, 10000);
       return (Array.isArray(d.streams) ? d.streams : []).map((s) => Object.assign({}, s, { _source: src.name }));
@@ -791,15 +821,18 @@ function buildStreams(rawList, opts) {
 
     const info = parseRelease(full);
     let verdict = subVerdict(detectSubs(full, lang, s.subtitles));
+    let proof = null;
     const pr = probes && s.url ? probes.get(s.url) : null;
     if (pr && !pr.unknown) {
-      const proof = probeVerdict(pr, lang);
+      // the real track list beats any guess from the release name
+      proof = probeVerdict(pr, lang);
       if (proof.kind === 'psub') verdict = proof.bitmap ? 'psubimg' : 'psub';
       else if (proof.kind === 'paudio') verdict = 'paudio';
       else if (verdict !== 'hard' && verdict !== 'addon') verdict = 'pnone';
     }
-    if (fn) rememberFile(fn, text, verdict === 'psubimg' ? 'psubimg' : '');
+    if (fn) rememberFile(lang, fn, text, verdict === 'psubimg' ? 'psubimg' : (proof && proof.kind));
 
+    // title
     const titleSrc = pickTitleLine(s);
     const base = titleSrc.replace(/\.(mkv|mp4|avi|m4v|ts|wmv|mov)$/i, '');
     const title = base
@@ -827,33 +860,39 @@ function buildStreams(rawList, opts) {
     if (info.size)    q5.push('📦 ' + info.size.toFixed(1) + ' GB');
     if (info.seeders) q5.push('👤 ' + info.seeders);
 
-    // ══════════════════════════════════════════════════════════════
-    // Clean subtitle line: icon + flag + score
-    // ══════════════════════════════════════════════════════════════
-    const pct = subScore(verdict);
-    const ICON = {
-      psub: '✅', psubimg: '✅', paudio: '✅', pnone: '🚫',
-      sub: '💬', addon: '💬', hard: '🔒', audio: '🗣️',
-      multi: '❔', hardx: '🔒', flag: '🌐', none: '🚫',
+    const extTail = ext ? ' · external will load' : '';
+    const proofNote = proof && proof.kind === 'psub' && proof.n > 1 ? ' (' + proof.n + ' tracks)' : '';
+    const hasNote = proof && proof.has && proof.has.length ? ' (file has: ' + proof.has.join(' ') + ')' : '';
+    const forcedNote = proof && proof.forcedOnly ? ' (only a forced track)' : '';
+    const subLines = {
+      psub:  '✅ ' + L.flag + ' ' + L.name + ' subs embedded · verified' + proofNote,
+      psubimg: '✅ ' + L.flag + ' ' + L.name + ' subs embedded (image-based) · verified' + proofNote + (ext ? ' · text backup will load' : ''),
+      paudio: '✅ 🗣️ ' + L.flag + ' ' + L.name + ' audio · verified',
+      pnone: '❌ ' + L.name + ' subs NOT in file (checked)' + forcedNote + hasNote + extTail,
+      sub:   '💬 ' + L.flag + ' ' + L.name + ' subs in release name · not verified',
+      addon: '💬 ' + L.flag + ' ' + L.name + ' subs provided',
+      hard:  '🔒 ' + L.flag + ' ' + L.name + ' hardcoded subs',
+      audio: '🗣️ ' + L.flag + ' ' + L.name + ' in release name · not verified',
+      multi: '❔ Multi subs in name · not verified',
+      hardx: '🔒 Hardcoded subs (language unknown)',
+      flag:  '🌐 ' + L.flag + ' ' + L.name + ' tag · not verified',
+      none:  '🚫 No ' + L.name + ' subs found in name' + extTail,
     };
-    const icon = ICON[verdict] || '🚫';
-    const flag = (verdict === 'multi' || verdict === 'hardx') ? '' : ' ' + L.flag;
-    const subLine = icon + flag + ' ' + pct + '/100';
 
     const lines = ['📁 ' + title];
     if (q3.length) lines.push(q3.join(' '));
     if (q4.length) lines.push(q4.join(' '));
     if (q5.length) lines.push(q5.join(' '));
-    lines.push(subLine);
+    lines.push(subLines[verdict]);
 
     const o = {
       name: head + badge,
       description: lines.join('\n'),
       behaviorHints: Object.assign({}, bh, { bingeGroup: 'stremify-' + (s._source || '') + '-' + info.res }),
     };
-    o.title = o.description;
+    o.title = o.description; // older Stremio clients read "title"
 
-    if (!bh.filename && fn) o.behaviorHints.filename = fn;
+    if (!bh.filename && fn) o.behaviorHints.filename = fn; // lets Stremio pass the file name back to /subtitles
     if (s.url) o.url = s.url;
     else {
       o.infoHash = s.infoHash;
@@ -866,7 +905,7 @@ function buildStreams(rawList, opts) {
   }
 
   return items
-    .filter((x) => x.score > -50)
+    .filter((x) => x.score > -50) // CAM / telesync releases
     .sort((a, b) => b.tier - a.tier || b.score - a.score || b.size - a.size)
     .map((x) => x.o);
 }
@@ -901,7 +940,7 @@ function decodeConfig(tok) {
 function buildManifest() {
   return {
     id: 'com.stremify.addon',
-    version: '7.0.0',
+    version: VERSION,
     name: 'Stremify',
     description: 'Multi-source stream addon that verifies embedded subtitles (MKV + MP4) for your language and ranks those files first.',
     resources: ['stream', 'subtitles'],
@@ -931,6 +970,8 @@ function send(res, code, body, headers) {
     'Access-Control-Allow-Headers': '*',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Content-Type': 'application/json; charset=utf-8',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
   }, headers));
   res.end(typeof body === 'string' ? body : JSON.stringify(body));
 }
@@ -940,6 +981,7 @@ function sendHtml(res, data) {
     'Content-Type': MIME['.html'],
     'Cache-Control': 'no-cache',
     'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer', // the page URL contains the saved config (incl. API key)
   });
   res.end(data);
 }
@@ -971,6 +1013,31 @@ function serveStatic(res, rel) {
   });
 }
 
+/* ---- per-IP rate limit (fixed 1-minute window) ---- */
+const hits = new Map();
+function clientIp(rq) {
+  if (TRUST_PROXY) {
+    const x = String(rq.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (x) return x;
+  }
+  return (rq.socket && rq.socket.remoteAddress) || '';
+}
+function rateLimited(rq) {
+  if (!RATE_LIMIT) return false;
+  const ip = clientIp(rq);
+  const now = Date.now();
+  let h = hits.get(ip);
+  if (!h || now - h.t >= 60000) { h = { t: now, n: 0 }; hits.set(ip, h); }
+  return ++h.n > RATE_LIMIT;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of hits) if (now - v.t >= 60000) hits.delete(k);
+}, 60000).unref();
+
+// identical simultaneous requests (Stremio often sends several) share one upstream fetch
+const inflight = new Map();
+
 async function handleStreams(res, tok, type, id) {
   const cfg = decodeConfig(tok);
   const lang = own(LANGS, cfg.lang) ? cfg.lang : 'en';
@@ -986,11 +1053,18 @@ async function handleStreams(res, tok, type, id) {
   if (cached) return send(res, 200, cached);
 
   try {
-    const raw = await fetchAllStreams(sources, type, id, debrid, key);
-    const probes = cfg.verify === false ? null : await probeStreams(raw);
-    const out = { streams: buildStreams(raw, { lang, debrid, ext, probes }) };
-    if (out.streams.length) remember(cacheKey, out); // never cache empty/failed results
-    return send(res, 200, out);
+    let job = inflight.get(cacheKey);
+    if (!job) {
+      job = (async () => {
+        const raw = await fetchAllStreams(sources, type, id, debrid, key);
+        const probes = cfg.verify === false ? null : await probeStreams(raw);
+        const out = { streams: buildStreams(raw, { lang, debrid, ext, probes }) };
+        if (out.streams.length) remember(cacheKey, out); // never cache empty/failed results
+        return out;
+      })().finally(() => inflight.delete(cacheKey));
+      inflight.set(cacheKey, job);
+    }
+    return send(res, 200, await job);
   } catch (e) {
     return send(res, 200, { streams: [] });
   }
@@ -1010,7 +1084,7 @@ async function handleSubtitles(res, tok, type, id, extraRaw) {
   //  - embedded subs / language audio  -> still offer ONE external subtitle as a backup
   let max = 8;
   if (fn) {
-    const known = fileTexts.get(fn) || {};
+    const known = fileTexts.get(lang + '|' + fn) || {};
     const r = detectSubs((known.text || '') + '\n' + fn, lang, null);
     if (r.hard) return send(res, 200, { subtitles: [] });
     if (known.proof === 'psub' || known.proof === 'paudio') {
@@ -1064,6 +1138,7 @@ async function handler(rq, res) {
 
   const m2 = pathname.match(/^\/c\/([\w-]+)\/stream\/(movie|series)\/([^/]+)\.json$/);
   if (m2) {
+    if (rateLimited(rq)) return send(res, 429, { error: 'rate limited' }, { 'Retry-After': '60' });
     const id = safeDecode(m2[3]);
     if (!id) return send(res, 400, { error: 'bad id' });
     return handleStreams(res, m2[1], m2[2], id);
@@ -1071,6 +1146,7 @@ async function handler(rq, res) {
 
   const m3 = pathname.match(/^\/c\/([\w-]+)\/subtitles\/(movie|series)\/([^/]+?)(?:\/([^/]*?))?\.json$/);
   if (m3) {
+    if (rateLimited(rq)) return send(res, 429, { error: 'rate limited' }, { 'Retry-After': '60' });
     const id = safeDecode(m3[3]);
     if (!id) return send(res, 400, { error: 'bad id' });
     return handleSubtitles(res, m3[1], m3[2], id, m3[4]);
@@ -1080,8 +1156,18 @@ async function handler(rq, res) {
 }
 
 if (require.main === module) {
-  http.createServer((rq, rs) => handler(rq, rs).catch((e) => send(rs, 500, { error: e.message })))
-    .listen(PORT, () => console.log('Stremify on ' + PORT));
+  process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && e.message ? e.message : e));
+  const server = http.createServer((rq, rs) => handler(rq, rs).catch((e) => {
+    console.error('handler error:', e && e.message);
+    if (!rs.headersSent) send(rs, 500, { error: 'internal error' }); // never leak internals
+    else rs.end();
+  }));
+  server.requestTimeout = 30000;
+  server.headersTimeout = 15000;
+  server.listen(PORT, () => console.log('Stremify ' + VERSION + ' on ' + PORT));
+  const stop = () => { server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
 }
 module.exports = { handler, LANGS, DEBRID, detectSubs, subVerdict, buildStreams, encodeConfig, decodeConfig,
-  mkvTracks, mp4Scan, probeVerdict, langMatches };
+  mkvTracks, mp4Scan, probeVerdict, langMatches, httpGet, isTorrentioHost };
