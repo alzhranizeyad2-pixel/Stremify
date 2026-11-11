@@ -287,13 +287,13 @@
     <span>Attach an external subtitle when none is embedded</span>
   </label>
 
-  <label class="check" for="probeSubs">
-    <input type="checkbox" id="probeSubs" checked>
-    <span>Verify embedded subs by reading the real file (cached debrid links only)</span>
+  <label class="check" for="verify">
+    <input type="checkbox" id="verify" checked>
+    <span>Verify embedded subtitles inside the file (debrid links only)</span>
   </label>
 
   <div class="legend">
-    ✅ confirmed inside the file &nbsp;·&nbsp; 💬 embedded subs &nbsp;·&nbsp; 🗣️ language audio/tag &nbsp;·&nbsp; 🔒 hardcoded subs &nbsp;·&nbsp; 🌐 language tag only &nbsp;·&nbsp; 🚫 nothing found
+    💬 embedded subs &nbsp;·&nbsp; 🗣️ language audio/tag &nbsp;·&nbsp; 🔒 hardcoded subs &nbsp;·&nbsp; 🌐 language tag only &nbsp;·&nbsp; 🚫 nothing found
   </div>
 </section>
 
@@ -463,7 +463,7 @@
         debrid: $('debridDD').dataset.value || '',
         key: $('key').value.trim(),
         ext: $('extSubs').checked,
-        probe: $('probeSubs').checked,
+        verify: $('verify').checked,
       },
       bad,
     };
@@ -502,7 +502,7 @@
       $('debridDD')._apply(cfg.debrid || '');
       if (cfg.key) $('key').value = cfg.key;
       $('extSubs').checked = cfg.ext !== false;
-      $('probeSubs').checked = cfg.probe !== false;
+      $('verify').checked = cfg.verify !== false;
     } catch (e) { /* ignore a malformed token */ }
   }
   prefill();

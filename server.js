@@ -136,6 +136,41 @@ async function req(url, headers, ms, hops) {
 }
 const getJSON = async (url, headers, ms) => JSON.parse(await req(url, headers, ms));
 
+// Read only the first `bytes` of a remote file (Range request, redirects re-checked).
+async function fetchHead(url, bytes, ms, hops) {
+  hops = hops || 0;
+  const u = new URL(url);
+  if (!protoOk(u.protocol)) throw new Error('https only');
+  await assertPublicHost(u.hostname);
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms || 7000);
+  try {
+    const r = await fetch(u.href, {
+      headers: { 'User-Agent': UA, 'Range': 'bytes=0-' + (bytes - 1) },
+      redirect: 'manual',
+      signal: ctrl.signal,
+    });
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      if (!loc || hops >= 3) throw new Error('bad redirect');
+      return await fetchHead(new URL(loc, u).href, bytes, ms, hops + 1);
+    }
+    if (r.status !== 200 && r.status !== 206) throw new Error('HTTP ' + r.status);
+    if (!r.body) throw new Error('no body');
+    const reader = r.body.getReader();
+    const chunks = [];
+    let got = 0;
+    while (got < bytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value));
+      got += value.length;
+    }
+    try { await reader.cancel(); } catch (e) { /* ignore */ }
+    return Buffer.concat(chunks).subarray(0, bytes);
+  } finally { clearTimeout(id); }
+}
+
 /* ------------------------------------------------------------------ */
 /* Cache                                                               */
 /* ------------------------------------------------------------------ */
@@ -153,8 +188,8 @@ const recall = (k, ttl) => {
 
 // filename -> release text, so the subtitles endpoint can re-check a chosen stream
 const fileTexts = new Map();
-function rememberFile(fn, text) {
-  fileTexts.set(fn, text);
+function rememberFile(fn, text, proof) {
+  fileTexts.set(fn, { text, proof: proof || '' });
   if (fileTexts.size > 3000) fileTexts.delete(fileTexts.keys().next().value);
 }
 
@@ -214,13 +249,18 @@ function parseGroup(titleSrc) {
 }
 
 // Best "release name" line out of a raw stream object.
+const looksRel = (s) => !!s && s.length > 8 &&
+  /\d{3,4}p|web|blu-?ray|hdtv|x26[45]|hevc|\b(19|20)\d{2}\b|s\d{1,2}e\d{1,3}/i.test(s);
+
 function pickTitleLine(s) {
   const fn = s.behaviorHints && s.behaviorHints.filename;
   if (fn) return String(fn);
-  const m = [s.description, s.title].map((v) => String(v || '').match(/(?:📄|📁|📂|🎞️?|🎬|💿)\s*([^\n]+)/)).find(Boolean);
-  if (m) return m[1].replace(/\s+[\/|]\s+.*$/, '').trim();
-  const t = String(s.title || s.description || '').split('\n')[0];
-  return t || String(s.name || '').split('\n')[0] || '';
+  const lines = [s.title, s.description].filter(Boolean).join('\n')
+    .split('\n').map((l) => l.trim()).filter(Boolean);
+  const strip = (l) => l.replace(/^[^\p{L}\p{N}\[(]+/u, '').replace(/\s*[\/|].*$/, '').trim();
+  const pick = lines.find((l) => /^[📂📁📄🎞🎬💿]/u.test(l) && looksRel(strip(l))) ||
+    lines.find((l) => looksRel(strip(l))) || lines[0] || '';
+  return strip(pick) || String(s.name || '').split('\n')[0] || '';
 }
 
 /* ------------------------------------------------------------------ */
@@ -344,19 +384,166 @@ function subVerdict(r) {
   if (r.flag) return 'flag';
   return 'none';
 }
-const RANK = { real: 6, sub: 5, addon: 5, audio: 5, hard: 4, multi: 3, flag: 3, forced: 2, hardx: 1, claimed: 1, realno: 1, none: 1 };
+// Score weights (same idea as Anseb): a release that already has your language
+// can outrank a higher resolution that does not.
+const W_RES = { 2160: 40, 1080: 30, 720: 15, 480: 5, 0: 0 };
+const W_SRC = { 'BluRay REMUX': 25, 'BluRay': 20, 'WEB-DL': 18, 'WEBRip': 12, 'HDTV': 8, 'DVD': 2, 'CAM': -200, '': 0 };
+const W_SUB = { psub: 50, paudio: 45, sub: 35, addon: 35, audio: 30, hard: 25, flag: 15, multi: 5, hardx: 0, none: 0, pnone: -5 };
 
-// Anseb-style weighting: a release that really carries the language (embedded = +35, unconfirmed
-// "multi"/flag = +10) is ranked together with the resolution instead of strictly after it.
-// Set EMB_WEIGHT to 0 to go back to pure resolution-first ordering.
-const EMB_WEIGHT = 1;
-const RES_SCORE = { 2160: 40, 1080: 30, 720: 15, 480: 5, 0: 0 };
-const EMB_BONUS = { real: 50, sub: 35, addon: 35, audio: 35, hard: 28, multi: 10, flag: 10, forced: 5, hardx: 3, claimed: 0, realno: 0, none: 0 };
-const rankScore = (res, verdict) => (RES_SCORE[res] || 0) + EMB_WEIGHT * (EMB_BONUS[verdict] || 0);
+function scoreStream(info, verdict) {
+  let v = (W_RES[info.res] || 0) + (W_SRC[info.source] || 0) + (W_SUB[verdict] || 0);
+  if (info.seeders) v += Math.min(14, Math.log10(1 + info.seeders) * 5);
+  return v;
+}
 
 /* ------------------------------------------------------------------ */
 /* Fetching and building streams                                       */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* Verified detection: read the real track list inside an MKV file     */
+/* ------------------------------------------------------------------ */
+
+const PROBE_BYTES = 256 * 1024;
+
+function ebmlId(b, p) {
+  const f = b[p];
+  if (f === undefined) return null;
+  let l = 1, m = 0x80;
+  while (l <= 4 && !(f & m)) { l++; m >>= 1; }
+  if (l > 4 || p + l > b.length) return null;
+  let v = 0;
+  for (let i = 0; i < l; i++) v = v * 256 + b[p + i];
+  return { id: v, len: l };
+}
+
+function ebmlSize(b, p) {
+  const f = b[p];
+  if (f === undefined) return null;
+  let l = 1, m = 0x80;
+  while (l <= 8 && !(f & m)) { l++; m >>= 1; }
+  if (l > 8 || p + l > b.length) return null;
+  let v = f & (m - 1);
+  let allOnes = v === m - 1;
+  for (let i = 1; i < l; i++) {
+    v = v * 256 + b[p + i];
+    if (b[p + i] !== 0xff) allOnes = false;
+  }
+  return { size: allOnes ? -1 : v, len: l };
+}
+
+// cb(id, dataStart, dataEnd, truncated) — return false to stop
+function ebmlWalk(b, start, end, cb) {
+  let p = start;
+  while (p < end) {
+    const id = ebmlId(b, p);
+    if (!id) return;
+    const sz = ebmlSize(b, p + id.len);
+    if (!sz) return;
+    const ds = p + id.len + sz.len;
+    if (ds > end) return;
+    const unknown = sz.size < 0;
+    const de = unknown ? end : Math.min(ds + sz.size, end);
+    const trunc = unknown || ds + sz.size > end;
+    if (cb(id.id, ds, de, trunc) === false) return;
+    p = de;
+  }
+}
+
+function ebmlUint(b, s, e) { let v = 0; for (let i = s; i < e; i++) v = v * 256 + b[i]; return v; }
+function ebmlStr(b, s, e) { return b.toString('utf8', s, e).replace(/\0+$/, ''); }
+
+function readTracks(b, s, e) {
+  const out = { subs: [], audio: [] };
+  ebmlWalk(b, s, e, (id, ds, de) => {
+    if (id !== 0xAE) return; // TrackEntry
+    const t = { type: 0, lang: 'eng', bcp: '', name: '', codec: '', forced: false };
+    ebmlWalk(b, ds, de, (i, s2, e2) => {
+      if (i === 0x83) t.type = ebmlUint(b, s2, e2);
+      else if (i === 0x22B59C) t.lang = ebmlStr(b, s2, e2).toLowerCase();
+      else if (i === 0x22B59D) t.bcp = ebmlStr(b, s2, e2).toLowerCase();
+      else if (i === 0x536E) t.name = ebmlStr(b, s2, e2);
+      else if (i === 0x86) t.codec = ebmlStr(b, s2, e2);
+      else if (i === 0x55AA) t.forced = ebmlUint(b, s2, e2) === 1;
+    });
+    if (/forced/i.test(t.name)) t.forced = true;
+    t.bitmap = /PGS|VOBSUB|DVBSUB|HDMV/i.test(t.codec);
+    if (t.type === 17) out.subs.push(t);
+    else if (t.type === 2) out.audio.push(t);
+  });
+  return out;
+}
+
+// Returns { subs, audio } or null when the file is not MKV / Tracks could not be read in full.
+function mkvTracks(b) {
+  if (!b || b.length < 64 || b.readUInt32BE(0) !== 0x1a45dfa3) return null;
+  let result = null;
+  ebmlWalk(b, 0, b.length, (id, ds, de) => {
+    if (id !== 0x18538067) return; // skip the EBML header, enter Segment
+    ebmlWalk(b, ds, de, (id2, ds2, de2, trunc2) => {
+      if (id2 === 0x1F43B675) return false; // Cluster reached: no Tracks before it
+      if (id2 !== 0x1654AE6B) return;       // not Tracks
+      if (!trunc2) result = readTracks(b, ds2, de2);
+      return false;
+    });
+    return false;
+  });
+  return result;
+}
+
+function trackMatches(t, lang) {
+  if (langMatches(t.bcp || t.lang, lang)) return true;
+  return tokenize(t.name).some((w) => STRONG[w] === lang);
+}
+
+function trackLabel(t) {
+  const code = t.bcp || t.lang;
+  for (const k of Object.keys(LANGS)) if (langMatches(code, k)) return LANGS[k].flag;
+  return String(code || '?').slice(0, 3);
+}
+
+function probeVerdict(p, lang) {
+  const mine = p.subs.filter((t) => trackMatches(t, lang));
+  const real = mine.filter((t) => !t.forced);
+  if (real.length) return { kind: 'psub', n: real.length, bitmap: real.every((t) => t.bitmap) };
+  if (p.audio.some((t) => trackMatches(t, lang))) return { kind: 'paudio' };
+  const has = [];
+  p.subs.forEach((t) => { const l = trackLabel(t); if (!has.includes(l)) has.push(l); });
+  return { kind: 'pnone', has, forcedOnly: mine.length > 0 };
+}
+
+// Only probe streams that are already cached on the debrid service, so probing
+// can never make a debrid service start downloading a torrent.
+const CACHED_RE = /\[\w{1,3}\+\]|⚡|cached|instant/i;
+const probeCache = new Map();
+
+async function probeOne(url) {
+  const k = sha(url);
+  const hit = probeCache.get(k);
+  if (hit && Date.now() - hit.t < (hit.v.unknown ? 30 * 60e3 : 6 * 3600e3)) return hit.v;
+  let v;
+  try {
+    v = mkvTracks(await fetchHead(url, PROBE_BYTES, 7000)) || { unknown: true };
+  } catch (e) { v = { unknown: true }; }
+  probeCache.set(k, { t: Date.now(), v });
+  if (probeCache.size > 2000) probeCache.delete(probeCache.keys().next().value);
+  return v;
+}
+
+async function probeStreams(raw) {
+  const out = new Map();
+  const urls = [];
+  for (const s of raw) {
+    if (!s || !s.url || urls.includes(s.url)) continue;
+    if (!CACHED_RE.test(String(s.name || ''))) continue;
+    urls.push(s.url);
+    if (urls.length >= 16) break;
+  }
+  if (!urls.length) return out;
+  const jobs = urls.map(async (u) => { out.set(u, await probeOne(u)); });
+  await Promise.race([Promise.allSettled(jobs), new Promise((ok) => setTimeout(ok, 8000))]);
+  return out;
+}
 
 const DEBRID_KEYS = /(?:^|[\/|])(?:realdebrid|alldebrid|premiumize|debridlink|torbox|offcloud|putio)=/i;
 
@@ -385,190 +572,13 @@ async function fetchAllStreams(sources, type, id, debrid, key) {
   return (await Promise.all(tasks)).flat();
 }
 
-/* ------------------------------------------------------------------ */
-/* Real verification: read the track list from the video file itself   */
-/* ------------------------------------------------------------------ */
-/*
-  Names are only hints ("Multi subs" may or may not contain Arabic). For releases that are already
-  cached on a debrid service we download the first ~1 MB of the MKV (HTTP Range request) and read
-  the Matroska "Tracks" header: every subtitle track with its language code, name, codec and
-  forced flag. That is the file's own list, so the answer is certain, not a guess.
-    yes     a non-forced subtitle track in the user's language exists
-    forced  only forced (signs/foreign parts) track(s) in that language
-    no      the file has no subtitle track in that language
-    unknown could not read it (not MKV, MP4 with moov at the end, timeout, host refused ...)
-  Hard-coded (burned-in) subtitles are pictures inside the video and can never be detected this way.
-*/
-
-const PROBE_MAX = 1536 * 1024;   // never download more than this per file
-const PROBE_WAIT = 6000;         // how long a stream request waits for probes (they keep running and fill the cache)
-const MAX_PROBE = 8;             // files probed per request
-const CACHED_RE = /\+\]|⚡|cached|instant/i;
-const fileProbe = new Map();     // filename -> 'yes' | 'no' | 'forced' (used by the subtitles endpoint)
-
-function ebmlId(b, p) {
-  const f = b[p];
-  if (f === undefined) return null;
-  const n = f >= 0x80 ? 1 : f >= 0x40 ? 2 : f >= 0x20 ? 3 : f >= 0x10 ? 4 : 0;
-  if (!n || p + n > b.length) return null;
-  let v = 0;
-  for (let i = 0; i < n; i++) v = v * 256 + b[p + i];
-  return { id: v, len: n };
-}
-function ebmlSize(b, p) {
-  const f = b[p];
-  if (f === undefined) return null;
-  let n = 1, m = 0x80;
-  while (n <= 8 && !(f & m)) { n++; m >>= 1; }
-  if (n > 8 || p + n > b.length) return null;
-  let v = f & (m - 1), ones = (f & (m - 1)) === m - 1;
-  for (let i = 1; i < n; i++) { v = v * 256 + b[p + i]; if (b[p + i] !== 0xff) ones = false; }
-  return { size: ones ? -1 : v, len: n };
-}
-const ebmlUint = (b, s, e) => { let v = 0; for (let i = s; i < e; i++) v = v * 256 + b[i]; return v; };
-const ebmlStr = (b, s, e) => b.toString('utf8', s, e).replace(/\0+$/, '').trim();
-
-function* ebmlKids(b, s, e) {
-  let p = s;
-  while (p < e) {
-    const i = ebmlId(b, p); if (!i) return;
-    const z = ebmlSize(b, p + i.len); if (!z || z.size < 0) return;
-    const ds = p + i.len + z.len;
-    yield { id: i.id, ds, de: Math.min(e, ds + z.size) };
-    p = ds + z.size;
-  }
-}
-
-function readTracks(b, s, e) {
-  const out = [];
-  for (const k of ebmlKids(b, s, e)) {
-    if (k.id !== 0xAE) continue;                       // TrackEntry
-    const t = { type: 0, lang: 'eng', bcp: '', name: '', codec: '', forced: false };   // Matroska default language = eng
-    for (const f of ebmlKids(b, k.ds, k.de)) {
-      if (f.id === 0x83) t.type = ebmlUint(b, f.ds, f.de);              // TrackType (17 = subtitle)
-      else if (f.id === 0x22B59C) t.lang = ebmlStr(b, f.ds, f.de);      // Language (ISO 639-2)
-      else if (f.id === 0x22B59D) t.bcp = ebmlStr(b, f.ds, f.de);       // LanguageBCP47
-      else if (f.id === 0x536E) t.name = ebmlStr(b, f.ds, f.de);         // TrackName
-      else if (f.id === 0x86) t.codec = ebmlStr(b, f.ds, f.de);          // CodecID
-      else if (f.id === 0x55AA) t.forced = ebmlUint(b, f.ds, f.de) === 1; // FlagForced
-    }
-    if (/\bforced\b/i.test(t.name)) t.forced = true;
-    if (t.type === 17) out.push(t);
-  }
-  return out;
-}
-
-// state: need (more bytes required) | bad (not Matroska / no Tracks before the first Cluster) | done
-function parseMkvTracks(b) {
-  const h = ebmlId(b, 0);
-  if (!h) return { state: b.length < 4 ? 'need' : 'bad' };
-  if (h.id !== 0x1A45DFA3) return { state: 'bad' };           // EBML header
-  const hs = ebmlSize(b, h.len);
-  if (!hs || hs.size < 0) return { state: hs ? 'bad' : 'need' };
-  let p = h.len + hs.len + hs.size;
-  const sg = ebmlId(b, p);
-  if (!sg) return { state: 'need' };
-  if (sg.id !== 0x18538067) return { state: 'bad' };          // Segment
-  const ss = ebmlSize(b, p + sg.len);
-  if (!ss) return { state: 'need' };
-  p += sg.len + ss.len;
-  for (;;) {
-    const i = ebmlId(b, p);
-    if (!i) return { state: 'need' };
-    const z = ebmlSize(b, p + i.len);
-    if (!z) return { state: 'need' };
-    if (i.id === 0x1F43B675 || z.size < 0) return { state: 'bad' };   // Cluster reached without Tracks
-    const ds = p + i.len + z.len;
-    if (i.id === 0x1654AE6B) {                                         // Tracks
-      if (ds + z.size > b.length) return { state: 'need' };
-      return { state: 'done', tracks: readTracks(b, ds, ds + z.size) };
-    }
-    p = ds + z.size;
-  }
-}
-
-const trackIsLang = (t, lang) =>
-  langMatches(t.bcp || t.lang, lang) || tokenize(t.name).some((w) => STRONG[w] === lang);
-const CODEC_NAMES = { 'S_TEXT/UTF8': 'SRT', 'S_TEXT/ASS': 'ASS', 'S_TEXT/SSA': 'SSA', 'S_TEXT/WEBVTT': 'VTT', 'S_HDMV/PGS': 'PGS', 'S_VOBSUB': 'VobSub' };
-
-function judgeTracks(tracks, lang) {
-  const mine = tracks.filter((t) => trackIsLang(t, lang));
-  const full = mine.filter((t) => !t.forced);
-  const pick = full[0] || mine[0];
-  return {
-    state: full.length ? 'yes' : mine.length ? 'forced' : 'no',
-    total: tracks.length,
-    codec: pick ? (CODEC_NAMES[pick.codec] || pick.codec.replace(/^S_/, '')) : '',
-  };
-}
-
-async function probeFile(url, lang) {
-  const ck = sha('probe|' + lang + '|' + url);
-  const hit = recall(ck, 24 * 3600 * 1000);
-  if (hit) return hit;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 9000);
-  try {
-    let cur = url, r;
-    for (let hops = 0; ; hops++) {
-      const u = new URL(cur);
-      if (!protoOk(u.protocol)) throw new Error('https only');
-      await assertPublicHost(u.hostname);
-      r = await fetch(u.href, {
-        headers: { 'User-Agent': UA, 'Range': 'bytes=0-' + (PROBE_MAX - 1) },
-        redirect: 'manual',
-        signal: ctrl.signal,
-      });
-      if (r.status >= 300 && r.status < 400) {
-        const loc = r.headers.get('location');
-        try { await r.body.cancel(); } catch (e) { /* ignore */ }
-        if (!loc || hops >= 4) throw new Error('bad redirect');
-        cur = new URL(loc, u).href;
-        continue;
-      }
-      break;
-    }
-    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
-
-    const reader = r.body.getReader();
-    const chunks = [];
-    let total = 0, next = 128 * 1024, result = null;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (value) { chunks.push(value); total += value.length; }
-        if (done || total >= next || total >= PROBE_MAX) {
-          const p = parseMkvTracks(Buffer.concat(chunks));
-          if (p.state === 'done') { result = judgeTracks(p.tracks, lang); break; }
-          if (p.state === 'bad' || done || total >= PROBE_MAX) break;
-          next *= 3;
-        }
-      }
-    } finally { try { await reader.cancel(); } catch (e) { /* ignore */ } }
-    return result ? remember(ck, result, 1000) : { state: 'unknown' };
-  } finally { clearTimeout(timer); }
-}
-
-// Combine what the name suggested with what the file really contains.
-function finalVerdict(v, pr) {
-  if (!pr) return v;
-  if (pr.state === 'yes') return 'real';
-  if (pr.state === 'forced') return 'forced';
-  if (pr.state === 'no') {
-    if (v === 'sub') return 'claimed';                       // name says it, the file does not have it
-    if (v === 'multi' || v === 'flag' || v === 'hardx' || v === 'none') return 'realno';
-  }
-  return v;
-}
-
-async function buildStreams(rawList, opts) {
-  const { lang, debrid, ext } = opts;
+function buildStreams(rawList, opts) {
+  const { lang, debrid, ext, probes } = opts;
   const L = LANGS[lang];
   const badge = debrid && DEBRID[debrid] ? ' [' + DEBRID[debrid] + ']' : '';
   const seen = new Set();
-  const recs = [];
+  const items = [];
 
-  // pass 1: parse every stream and guess from the text
   for (const s of rawList) {
     if (!s || (!s.url && !s.infoHash)) continue;
 
@@ -584,38 +594,16 @@ async function buildStreams(rawList, opts) {
     const full = text + '\n' + fn;
 
     const info = parseRelease(full);
-    const verdict = subVerdict(detectSubs(full, lang, s.subtitles));
-    if (fn) rememberFile(fn, text);
-    recs.push({ s, bh, fn, full, info, verdict, probe: null });
-  }
-
-  // pass 2: verify the uncertain ones by reading the real file (cached debrid links only,
-  // so nothing is ever added to the user's debrid account by this check)
-  let pending = false;
-  if (opts.probe !== false) {
-    const prio = { multi: 0, flag: 0, hardx: 0, none: 1, sub: 2 };
-    const cands = recs
-      .filter((r) => r.s.url && CACHED_RE.test(String(r.s.name || '')) && prio[r.verdict] !== undefined)
-      .sort((a, b) => prio[a.verdict] - prio[b.verdict] || b.info.res - a.info.res || b.info.seeders - a.info.seeders)
-      .slice(0, MAX_PROBE);
-    if (cands.length) {
-      let timedOut = false, timer;
-      const jobs = cands.map(async (r) => {
-        const pr = await probeFile(r.s.url, lang).catch(() => ({ state: 'unknown' }));
-        r.probe = pr;
-        if (r.fn && pr.state !== 'unknown') fileProbe.set(r.fn, pr.state);
-      });
-      const wait = new Promise((ok) => { timer = setTimeout(() => { timedOut = true; ok(); }, PROBE_WAIT); });
-      await Promise.race([Promise.allSettled(jobs).then(() => clearTimeout(timer)), wait]);
-      pending = timedOut;
+    let verdict = subVerdict(detectSubs(full, lang, s.subtitles));
+    let proof = null;
+    const pr = probes && s.url ? probes.get(s.url) : null;
+    if (pr && !pr.unknown) {
+      // the real track list beats any guess from the release name
+      proof = probeVerdict(pr, lang);
+      if (proof.kind === 'psub' || proof.kind === 'paudio') verdict = proof.kind;
+      else if (verdict !== 'hard' && verdict !== 'addon') verdict = 'pnone';
     }
-  }
-
-  // pass 3: render
-  const items = [];
-  for (const r of recs) {
-    const { s, bh, fn, info } = r;
-    const verdict = finalVerdict(r.verdict, r.probe);
+    if (fn) rememberFile(fn, text, proof && proof.kind);
 
     // title
     const titleSrc = pickTitleLine(s);
@@ -645,22 +633,24 @@ async function buildStreams(rawList, opts) {
     if (info.size)    q5.push('📦 ' + info.size.toFixed(1) + ' GB');
     if (info.seeders) q5.push('👤 ' + info.seeders);
 
-    const pr = r.probe || {};
-    const extNote = ext ? ' · external will load' : '';
+    const extTail = ext ? ' · external will load' : '';
+    const proofNote = proof && proof.kind === 'psub'
+      ? (proof.n > 1 ? ' (' + proof.n + ' tracks)' : '') + (proof.bitmap ? ' · image-based' : '')
+      : '';
+    const hasNote = proof && proof.has && proof.has.length ? ' (file has: ' + proof.has.join(' ') + ')' : '';
+    const forcedNote = proof && proof.forcedOnly ? ' (only a forced track)' : '';
     const subLines = {
-      real:    '✅ ' + L.flag + ' ' + L.name + ' subs CONFIRMED inside the file' +
-               (pr.codec || pr.total ? ' (' + [pr.codec, pr.total ? pr.total + ' sub tracks' : ''].filter(Boolean).join(' · ') + ')' : ''),
-      forced:  '🔸 ' + L.flag + ' ' + L.name + ' forced subs only (inside the file)' + extNote,
-      claimed: '⚠️ Name says ' + L.name + ' subs but the file has none' + extNote,
-      realno:  '🚫 File checked: no ' + L.name + ' subs inside' + extNote,
-      sub:   '💬 ' + L.flag + ' ' + L.name + ' subs embedded',
+      psub:  '✅ ' + L.flag + ' ' + L.name + ' subs embedded · VERIFIED in file' + proofNote,
+      paudio: '✅ 🗣️ ' + L.flag + ' ' + L.name + ' audio · VERIFIED in file',
+      pnone: '❌ ' + L.name + ' subs NOT in file (checked)' + forcedNote + hasNote + extTail,
+      sub:   '💬 ' + L.flag + ' ' + L.name + ' subs in release name · not verified',
       addon: '💬 ' + L.flag + ' ' + L.name + ' subs provided',
       hard:  '🔒 ' + L.flag + ' ' + L.name + ' hardcoded subs',
-      audio: '🗣️ ' + L.flag + ' ' + L.name + ' audio/tag',
-      multi: '💬 Multi subs/audio (may include ' + L.name + ')',
+      audio: '🗣️ ' + L.flag + ' ' + L.name + ' in release name · not verified',
+      multi: '❔ Multi subs in name · not verified',
       hardx: '🔒 Hardcoded subs (language unknown)',
-      flag:  '🌐 ' + L.flag + ' ' + L.name + ' tag',
-      none:  ext ? '🚫 No ' + L.name + ' subs found · external will load' : '🚫 No ' + L.name + ' subs found',
+      flag:  '🌐 ' + L.flag + ' ' + L.name + ' tag · not verified',
+      none:  '🚫 No ' + L.name + ' subs found in name' + extTail,
     };
 
     const lines = ['📁 ' + title];
@@ -670,7 +660,7 @@ async function buildStreams(rawList, opts) {
     lines.push(subLines[verdict]);
 
     const o = {
-      name: head + badge + (verdict === 'real' ? ' ' + L.flag + '✅' : ''),
+      name: head + badge,
       description: lines.join('\n'),
       behaviorHints: Object.assign({}, bh, { bingeGroup: 'stremify-' + (s._source || '') + '-' + info.res }),
     };
@@ -684,13 +674,13 @@ async function buildStreams(rawList, opts) {
     }
     if (Array.isArray(s.subtitles)) o.subtitles = s.subtitles;
 
-    items.push({ o, res: info.res, rank: RANK[verdict], score: rankScore(info.res, verdict), seeders: info.seeders, size: info.size });
+    items.push({ o, score: scoreStream(info, verdict), size: info.size });
   }
 
-  items.sort((a, b) => b.score - a.score || b.res - a.res || b.rank - a.rank || b.seeders - a.seeders || b.size - a.size);
-  const out = items.map((x) => x.o);
-  out.pending = pending;   // not an index property, so it never reaches the JSON
-  return out;
+  return items
+    .filter((x) => x.score > -50) // CAM / telesync releases
+    .sort((a, b) => b.score - a.score || b.size - a.size)
+    .map((x) => x.o);
 }
 
 /* ------------------------------------------------------------------ */
@@ -714,7 +704,7 @@ function decodeConfig(tok) {
       debrid: String(c.debrid || ''),
       key: String(c.key || '').slice(0, 200),
       ext: c.ext !== false,
-      probe: c.probe !== false,
+      verify: c.verify !== false,
     };
   } catch (e) { return {}; }
 }
@@ -722,7 +712,7 @@ function decodeConfig(tok) {
 function buildManifest() {
   return {
     id: 'com.stremify.addon',
-    version: '6.1.0',
+    version: '6.0.0',
     name: 'Stremify',
     description: 'Multi-source stream addon that detects embedded subtitles for your preferred language.',
     resources: ['stream', 'subtitles'],
@@ -808,10 +798,9 @@ async function handleStreams(res, tok, type, id) {
 
   try {
     const raw = await fetchAllStreams(sources, type, id, debrid, key);
-    const list = await buildStreams(raw, { lang, debrid, ext, probe: cfg.probe !== false });
-    const out = { streams: list };
-    // never cache empty/failed results, nor a list whose file checks are still running
-    if (out.streams.length && !list.pending) remember(cacheKey, out);
+    const probes = cfg.verify === false ? null : await probeStreams(raw);
+    const out = { streams: buildStreams(raw, { lang, debrid, ext, probes }) };
+    if (out.streams.length) remember(cacheKey, out); // never cache empty/failed results
     return send(res, 200, out);
   } catch (e) {
     return send(res, 200, { streams: [] });
@@ -827,19 +816,21 @@ async function handleSubtitles(res, tok, type, id, extraRaw) {
   try { extra = new URLSearchParams(extraRaw || ''); } catch (e) { extra = new URLSearchParams(''); }
   const fn = extra.get('filename') || '';
 
-  // The chosen file already carries the language -> no external subtitle needed
+  // Detection from the release name is a heuristic, so:
+  //  - hardcoded subs in your language -> nothing to add
+  //  - embedded subs / language audio  -> still offer ONE external subtitle as a backup
+  let max = 8;
   if (fn) {
-    const checked = fileProbe.get(fn);   // result of reading the real file, if we did
-    if (checked === 'yes') return send(res, 200, { subtitles: [] });
-    if (checked !== 'no' && checked !== 'forced') {
-      const r = detectSubs((fileTexts.get(fn) || '') + '\n' + fn, lang, null);
-      if (r.sub || r.audio || r.hard) return send(res, 200, { subtitles: [] });
-    }
+    const known = fileTexts.get(fn) || {};
+    const r = detectSubs((known.text || '') + '\n' + fn, lang, null);
+    if (r.hard) return send(res, 200, { subtitles: [] });
+    if (known.proof === 'psub' || known.proof === 'paudio') max = 1;      // verified in file
+    else if (!known.proof && (r.sub || r.audio)) max = 1;                  // name-based guess
   }
 
   const cacheKey = sha(['subs', lang, type, id].join('|'));
   const cached = recall(cacheKey, 30 * 60 * 1000);
-  if (cached) return send(res, 200, cached);
+  if (cached) return send(res, 200, { subtitles: cached.subtitles.slice(0, max) });
 
   try {
     const q = new URLSearchParams();
@@ -853,7 +844,7 @@ async function handleSubtitles(res, tok, type, id, extraRaw) {
       .map((x) => ({ id: String(x.id || x.url), url: x.url, lang: x.lang }));
     const out = { subtitles: subs };
     if (subs.length) remember(cacheKey, out);
-    return send(res, 200, out);
+    return send(res, 200, { subtitles: subs.slice(0, max) });
   } catch (e) {
     return send(res, 200, { subtitles: [] });
   }
@@ -894,4 +885,4 @@ if (require.main === module) {
   http.createServer((rq, rs) => handler(rq, rs).catch((e) => send(rs, 500, { error: e.message })))
     .listen(PORT, () => console.log('Stremify on ' + PORT));
 }
-module.exports = { handler, LANGS, DEBRID, detectSubs, subVerdict, buildStreams, encodeConfig, decodeConfig, parseMkvTracks, judgeTracks, probeFile };
+module.exports = { handler, LANGS, DEBRID, detectSubs, subVerdict, buildStreams, encodeConfig, decodeConfig };
